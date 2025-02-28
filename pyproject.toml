@@ -1,0 +1,91 @@
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling", "hatch-vcs"]
+
+[tool.hatch]
+version.source = "vcs"
+build.hooks.vcs.version-file = "./_version.py"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/f1_trainer"]
+
+[tool.hatch.build.targets.sdist]
+packages = ["src/f1_trainer"]
+
+[project]
+name = "f1_trainer"
+description = "A tool for training deep learning models for FIM"
+readme = "README.md"
+dynamic = ["version"] 
+requires-python = ">=3.11.0"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Tadd Bindas"},
+]
+maintainers = [
+    {name = "Tadd Bindas", email = "taddbindas@gmail.com"},
+]
+
+dependencies = [
+    "numpy==2.2.3",
+    "pandas==2.2.3",
+    "geopandas==1.0.1",
+    "pydantic==2.10.6",
+    "xarray==2025.1.2",
+    "scipy==1.15.1",
+    "hydra-core==1.3.2",
+    "tqdm==4.67.1",
+    "zarr==2.18.3",
+    "sympy==1.13.1",
+    "scikit-learn==1.6.1",
+    "matplotlib==3.10.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov",
+]
+jupyter = [
+    "ipykernel",
+    "jupyterlab",
+]
+cpu = [
+  "torch==2.6.0",
+  "torchvision==0.21.0",
+]
+cu124 = [
+  "torch==2.6.0",
+  "torchvision==0.21.0",
+]
+
+[tool.uv]
+conflicts = [
+  [
+    { extra = "cpu" },
+    { extra = "cu124" },
+  ],
+]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cu124", extra = "cu124" },
+]
+torchvision = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cu124", extra = "cu124" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
