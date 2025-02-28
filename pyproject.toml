@@ -42,6 +42,7 @@ dependencies = [
     "sympy==1.13.1",
     "scikit-learn==1.6.1",
     "matplotlib==3.10.0",
+    "rioxarray==0.18.2",
 ]
 
 [project.optional-dependencies]

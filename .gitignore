@@ -171,3 +171,5 @@ cython_debug/
 .pypirc
 _version.py
 data/
+
+.DS_Store
