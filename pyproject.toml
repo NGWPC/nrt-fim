@@ -49,6 +49,17 @@ test = [
     "pytest",
     "pytest-cov",
 ]
+
+docs = [
+    "pillow",
+    "cairosvg",
+    "mkdocs-material",
+    "mkdocs-git-committers-plugin",
+    "mkdocs-material-extensions",
+    "mkdocs-git-authors-plugin",
+    "mkdocs-git-revision-date-localized-plugin",
+]
+
 jupyter = [
     "ipykernel",
     "jupyterlab",
