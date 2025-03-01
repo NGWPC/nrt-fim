@@ -4,19 +4,19 @@ requires = ["hatchling", "hatch-vcs"]
 
 [tool.hatch]
 version.source = "vcs"
-build.hooks.vcs.version-file = "./_version.py"
+build.hooks.vcs.version-file = "./src/trainer/_version.py"
 
 [tool.hatch.metadata]
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/f1_trainer"]
+packages = ["src/trainer"]
 
 [tool.hatch.build.targets.sdist]
-packages = ["src/f1_trainer"]
+packages = ["src/trainer"]
 
 [project]
-name = "f1_trainer"
+name = "trainer"
 description = "A tool for training deep learning models for FIM"
 readme = "README.md"
 dynamic = ["version"] 
