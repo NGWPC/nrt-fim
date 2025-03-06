@@ -9,6 +9,8 @@ import xarray as xr
 from omegaconf import DictConfig
 from torch.utils.data import Dataset as TorchDataset
 
+from trainer.datasets.utils import read
+
 log = logging.getLogger(__name__)
 
 
@@ -16,7 +18,10 @@ class train_dataset(TorchDataset):
     """train_dataset class for handling dataset operations for training dMC models"""
 
     def __init__(self, cfg: DictConfig):
-        pass
+        self.cfg = cfg
+        
+        
+        
 
     def __len__(self) -> int:
         """Returns the total number of gauges."""
