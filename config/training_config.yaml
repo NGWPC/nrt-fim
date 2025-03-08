@@ -1,0 +1,21 @@
+defaults:
+  - _self_
+  - hydra: settings
+
+version: 0.1.0
+name: ${version}-f1-mvp
+
+data_sources:
+  statistics: /Users/taddbindas/projects/NGWPC/f1_trainer/statistics
+
+params:
+  save_path: ./
+
+train:
+  batch_size: 1
+  lr: 0.001
+  epochs: 100
+
+np_seed: 1
+seed: 0
+device: mps:0

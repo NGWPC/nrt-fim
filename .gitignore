@@ -171,5 +171,8 @@ cython_debug/
 .pypirc
 _version.py
 data/
+runs/
+.vscode
+.qodo
 
 .DS_Store

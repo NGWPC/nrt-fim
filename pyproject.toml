@@ -32,6 +32,7 @@ maintainers = [
 dependencies = [
     "numpy==2.2.3",
     "pandas==2.2.3",
+    "cubed-xarray==0.0.7",
     "geopandas==1.0.1",
     "pydantic==2.10.6",
     "xarray==2025.1.2",

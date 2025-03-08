@@ -1,5 +1,9 @@
 from datetime import datetime
+from pathlib import Path
 
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.colors import LinearSegmentedColormap
 import xarray as xr
 
 def read(start_time: datetime, end_time: datetime):
@@ -45,6 +49,41 @@ def read(start_time: datetime, end_time: datetime):
     ).SOIL_M
 
     return ds_r, ds_sm
+
+def save_prediction_image(pred_tensor, epoch, save_dir, batch=None,):
+    """
+    Save prediction tensor as an image file
+    
+    Args:
+        pred_tensor: The prediction tensor from your model
+        epoch: Current epoch number
+        batch: Optional batch number (if saving after each batch)
+        save_dir: Directory to save prediction images
+    """    
+    # Create save directory if it doesn't exist
+    save_dir = Path(save_dir)
+    save_dir.mkdir(exist_ok=True)
+    
+    # Move tensor to CPU if needed and convert to numpy
+    pred_np = pred_tensor.detach().cpu().squeeze().numpy()
+    
+    # Create a custom colormap for flood visualization
+    # Blue gradient for water/flood
+    cmap = LinearSegmentedColormap.from_list(
+        'flood_cmap', [(0, 'white'), (1, 'blue')], N=256
+    )
+    
+    # Create the plot
+    plt.figure(figsize=(10, 8))
+    plt.imshow(pred_np, cmap=cmap, vmin=0, vmax=1)
+    plt.colorbar(label='Flood Probability')
+    plt.title(f'Prediction - Epoch {epoch}' + (f', Batch {batch}' if batch is not None else ''))
+    plt.axis('off')
+    
+    # Save the image
+    filename = f'pred_epoch_{epoch}' + (f'_batch_{batch}' if batch is not None else '') + '.png'
+    plt.savefig(save_dir / filename, dpi=300, bbox_inches='tight')
+    plt.close()
 
 # if __name__ == "__main__":
 #     start_time = datetime.strptime("20190520 000000", "%Y%m%d %H%M%S")
