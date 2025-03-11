@@ -50,37 +50,53 @@ def read(start_time: datetime, end_time: datetime):
 
     return ds_r, ds_sm
 
-def save_prediction_image(pred_tensor, epoch, save_dir, batch=None,):
+def save_prediction_image(pred_tensor, epoch, save_dir, statistics, batch=None):
     """
-    Save prediction tensor as an image file
+    Plot denormalized prediction with proper colorbar for flood visualization
     
     Args:
-        pred_tensor: The prediction tensor from your model
-        epoch: Current epoch number
-        batch: Optional batch number (if saving after each batch)
-        save_dir: Directory to save prediction images
-    """    
-    # Create save directory if it doesn't exist
+        prediction: Normalized prediction array/tensor
+        mean: Mean value used in normalization
+        std: Standard deviation used in normalization
+        threshold: Threshold value for considering a pixel as flooded
+        figsize: Figure size tuple
+    """
     save_dir = Path(save_dir)
     save_dir.mkdir(exist_ok=True)
     
-    # Move tensor to CPU if needed and convert to numpy
     pred_np = pred_tensor.detach().cpu().squeeze().numpy()
     
-    # Create a custom colormap for flood visualization
-    # Blue gradient for water/flood
-    cmap = LinearSegmentedColormap.from_list(
-        'flood_cmap', [(0, 'white'), (1, 'blue')], N=256
-    )
+    obs_mean = statistics.loc[2]  # mean is at index 2
+    obs_std = statistics.loc[3]   # std is at index 3
+    pred_np = ((pred_np - 1e-8) * obs_std) + obs_mean
     
-    # Create the plot
-    plt.figure(figsize=(10, 8))
-    plt.imshow(pred_np, cmap=cmap, vmin=0, vmax=1)
-    plt.colorbar(label='Flood Probability')
-    plt.title(f'Prediction - Epoch {epoch}' + (f', Batch {batch}' if batch is not None else ''))
-    plt.axis('off')
+    vmin = np.min(pred_np)
+    vmax = np.max(pred_np)
+        
+    # Create a figure with two subplots
+    fig, ax1 = plt.subplots(1, 1, figsize=(10, 6))
     
-    # Save the image
+    colors = [(1, 1, 1), (0.8, 0.9, 1), (0.6, 0.8, 1), (0.4, 0.65, 1), (0.2, 0.5, 1), (0, 0.3, 0.8)]
+    flood_cmap = LinearSegmentedColormap.from_list('flood_cmap', colors)
+    
+    # Plot 1: Denormalized prediction with proper colorbar
+    im1 = ax1.imshow(pred_np, cmap=flood_cmap, vmin=vmin, vmax=vmax)
+    ax1.set_title(f"Coffeyville Flood Extent [Epoch: {epoch}]")
+    
+    cbar1 = fig.colorbar(im1, ax=ax1)
+    
+    # Calculate appropriate tick locations
+    # Create 5 evenly spaced ticks from vmin to vmax
+    tick_count = 5
+    ticks = np.linspace(vmin, vmax, tick_count)
+    cbar1.set_ticks(ticks)
+    
+    # Format tick labels to have consistent decimal places
+    tick_labels = [f"{tick:.2f}" for tick in ticks]
+    cbar1.set_ticklabels(tick_labels)
+    
+    cbar1.set_label('% of pixels flooded')
+    
     filename = f'pred_epoch_{epoch}' + (f'_batch_{batch}' if batch is not None else '') + '.png'
     plt.savefig(save_dir / filename, dpi=300, bbox_inches='tight')
     plt.close()

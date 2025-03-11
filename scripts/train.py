@@ -58,7 +58,7 @@ def training_loop(cfg, nn):
             optimizer.step()
             optimizer.zero_grad()
             
-            save_prediction_image(pred, epoch, save_dir=cfg.params.save_path / "plots", batch=i)
+            save_prediction_image(pred, epoch, save_dir=cfg.params.save_path / "plots", statistics=dataset.statistics["obs"], batch=i, )
             
             log.info(f"Epoch {epoch}, Batch {i}, Loss: {loss.item():.6f}")
 

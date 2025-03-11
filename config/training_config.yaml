@@ -14,7 +14,7 @@ params:
 train:
   batch_size: 1
   lr: 0.001
-  epochs: 100
+  epochs: 200
 
 np_seed: 1
 seed: 0
