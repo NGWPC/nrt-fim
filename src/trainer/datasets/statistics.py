@@ -1,16 +1,15 @@
 import logging
 from pathlib import Path
 
-import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
 from omegaconf import DictConfig
 
-
 log = logging.getLogger(__name__)
 
-def get_statistics(cfg: DictConfig, inputs: dict[str,  xr.Dataset | xr.DataArray | list[xr.Dataset]]) -> pd.DataFrame:
+
+def get_statistics(cfg: DictConfig, inputs: dict[str, xr.Dataset | xr.DataArray | list[xr.Dataset]]) -> pd.DataFrame:
     """Creating the necessary statistics for normalizing atributes
 
     Parameters
