@@ -44,7 +44,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest", "pytest-cov"]
+tests = ["pytest", "pytest-cov"]
 
 dev = ["pre-commit", "ruff", "black", "mypy"]
 
@@ -62,6 +62,8 @@ jupyter = ["ipykernel", "jupyterlab"]
 cpu = ["torch==2.6.0", "torchvision==0.21.0"]
 cu124 = ["torch==2.6.0", "torchvision==0.21.0"]
 
+grid = ["gdal==3.10.2", "geopandas==1.0.1"]
+
 [tool.uv]
 conflicts = [[{ extra = "cpu" }, { extra = "cu124" }]]
 
@@ -74,6 +76,10 @@ torchvision = [
   { index = "pytorch-cpu", extra = "cpu" },
   { index = "pytorch-cu124", extra = "cu124" },
 ]
+gdal = [
+  { index = "gdal-wheels", marker = "sys_platform == 'linux'" },
+  { index = "geospatial_wheels", marker = "sys_platform == 'win32'" },
+]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
@@ -83,6 +89,16 @@ explicit = true
 [[tool.uv.index]]
 name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[[tool.uv.index]]
+name = "geospatial_wheels"
+url = "https://nathanjmcdougall.github.io/geospatial-wheels-index/"
+explicit = true
+
+[[tool.uv.index]]
+name = "gdal-wheels"
+url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/simple"
 explicit = true
 
 [tool.black]
@@ -106,7 +122,6 @@ lint.select = [
   "UP",     # pyupgrade
   "RUF100", # Report unused noqa directives
 ]
-exclude = ["./tests*"]
 lint.ignore = [
   # line too long -> we accept long comment lines; black gets rid of long code lines
   "E501",
