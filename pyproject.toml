@@ -41,6 +41,8 @@ dependencies = [
   "matplotlib==3.10.0",
   "rioxarray==0.18.2",
   "s3fs==2025.3.2",
+  "geocube==0.7.1",
+  "python-dotenv==1.1.0"
 ]
 
 [project.optional-dependencies]
@@ -62,8 +64,6 @@ jupyter = ["ipykernel", "jupyterlab"]
 cpu = ["torch==2.6.0", "torchvision==0.21.0"]
 cu124 = ["torch==2.6.0", "torchvision==0.21.0"]
 
-grid = ["gdal==3.10.2", "geopandas==1.0.1"]
-
 [tool.uv]
 conflicts = [[{ extra = "cpu" }, { extra = "cu124" }]]
 
@@ -76,10 +76,6 @@ torchvision = [
   { index = "pytorch-cpu", extra = "cpu" },
   { index = "pytorch-cu124", extra = "cu124" },
 ]
-gdal = [
-  { index = "gdal-wheels", marker = "sys_platform == 'linux'" },
-  { index = "geospatial_wheels", marker = "sys_platform == 'win32'" },
-]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
@@ -89,16 +85,6 @@ explicit = true
 [[tool.uv.index]]
 name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"
-explicit = true
-
-[[tool.uv.index]]
-name = "geospatial_wheels"
-url = "https://nathanjmcdougall.github.io/geospatial-wheels-index/"
-explicit = true
-
-[[tool.uv.index]]
-name = "gdal-wheels"
-url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/simple"
 explicit = true
 
 [tool.black]
@@ -116,6 +102,7 @@ lint.select = [
   "I",      # isort
   "D",      # pydocstyle
   "B",      # flake8-bugbear
+  "Q",      # flake8-quotes
   "TID",    # flake8-tidy-imports
   "C4",     # flake8-comprehensions
   "BLE",    # flake8-blind-except

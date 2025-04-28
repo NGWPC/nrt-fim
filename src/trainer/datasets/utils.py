@@ -1,9 +1,12 @@
 from datetime import datetime
 from pathlib import Path
 
+import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
+import pyproj
 import xarray as xr
+from geocube.api.core import make_geocube
 from matplotlib.colors import LinearSegmentedColormap
 
 
@@ -29,7 +32,10 @@ def read(start_time: datetime, end_time: datetime):
 
     ds_r = (
         xr.open_dataset(
-            base_pattern_routing, backend_kwargs={"storage_options": so}, engine="zarr", chunked_array_type="cubed"
+            base_pattern_routing,
+            backend_kwargs={"storage_options": so},
+            engine="zarr",
+            chunked_array_type="cubed",
         )
         .sel(time=slice(start_time, end_time))
         .qSfcLatRunoff
@@ -96,6 +102,37 @@ def save_prediction_image(pred_tensor, epoch, save_dir, statistics, batch=None):
     filename = f"pred_epoch_{epoch}" + (f"_batch_{batch}" if batch is not None else "") + ".png"
     plt.savefig(save_dir / filename, dpi=300, bbox_inches="tight")
     plt.close()
+
+
+def rasterize(
+    input_vector: str | Path | gpd.GeoDataFrame,
+    output_raster: str | Path,
+    resolution: int | float,
+    attribute: str,
+    crs: pyproj.CRS | str | int,
+    dtype: np.dtype | str,
+    nodata_value: int | float = None,
+) -> None:
+    """A wrapper around xarray/geocube to convert a vector file or geopandas dataframe into a raster
+    where the value comes from the vector's 'attriubte'
+
+    Args:
+        input_vector: A vector dataset as a file or geopandas geodataframe
+        output_raster: Output path for raster file
+        resolution: resolution of cells
+        attribute: column name for value to rasterize
+        crs: A spatial coordinate reference system either as a pyproj class, 'ESPG:####', or as int (e.g 4326)
+        dtype: Specify a numpy datatype for the raster. 
+        nodata_value: Value to use for no data in raste. Defaults to None.
+    """
+    ds = make_geocube(input_vector, measurements=[attribute], resolution=(-resolution, resolution), output_crs=crs)
+
+    if nodata_value is not None:
+        ds[attribute] = ds[attribute].rio.write_nodata(nodata_value)
+
+    options = {"compress": "LZW", "tiled": "TRUE", "dtype": dtype}
+
+    ds[attribute].rio.to_raster(output_raster, **options)
 
 
 # if __name__ == "__main__":
