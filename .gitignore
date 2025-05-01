@@ -176,3 +176,5 @@ runs/
 .qodo
 
 .DS_Store
+
+examples/data

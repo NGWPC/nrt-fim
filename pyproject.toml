@@ -42,7 +42,9 @@ dependencies = [
   "rioxarray==0.18.2",
   "s3fs==2025.3.2",
   "geocube==0.7.1",
-  "python-dotenv==1.1.0"
+  "python-dotenv==1.1.0",
+  "pystac==1.13.0",
+  "boto3==1.37.1",
 ]
 
 [project.optional-dependencies]
