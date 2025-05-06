@@ -1,4 +1,3 @@
-import logging
 import os
 from typing import Any
 from urllib.parse import urlparse
@@ -55,7 +54,7 @@ class STACReader:
         asset_id: str,
         output_dir: str,
         output_name: str = None,
-    ) -> None:
+    ) -> str:
         """Reads an asset from a known collection and item.
 
         Args:
@@ -64,6 +63,10 @@ class STACReader:
             asset_id (str): valid asset id in STAC
             output_dir (str): directory to save to
             output_name (str, optional): output file name. Defaults to name of asset file.
+
+        Returns
+        -------
+            str: output path of saved file
         """
         col = self.root_catalog.get_child(collection)
 
@@ -78,7 +81,8 @@ class STACReader:
 
         try:
             s3.download_file(self.bucket, asset_path, output_file)
-            logging.info(f"Downloaded {self.bucket}/{asset_path} to {output_file}")
+            print(f"Downloaded {self.bucket}/{asset_path} to {output_file}")
+            return output_file
         except Exception:
             # force raise because jupyter wasn't raising
             raise
