@@ -13,8 +13,7 @@ from rasterio.vrt import WarpedVRT
 
 
 def calculate_flood_percentage(raster: xr.DataArray, target_resolution: int | float = 250) -> xr.DataArray:
-    """Converts a flood extent raster to a raster where each pixel represents % of pixels flooded when the
-    dataset is resampled.
+    """Converts a flood extent raster to a raster where each pixel represents % of pixels flooded when the dataset is resampled.
 
     Args:
         raster (xr.DataArray): Raster of flood extent (binary)
@@ -24,7 +23,6 @@ def calculate_flood_percentage(raster: xr.DataArray, target_resolution: int | fl
     -------
         xr.DataArray: Resampled raster representing percent flooded
     """
-    
     # Get the current resolution and dimensions
     current_res_x, current_res_y = raster.rio.resolution()
     current_width = raster.rio.width
@@ -125,10 +123,7 @@ def generate_flood_percent(
     resolution: int | float = None,
     overwrite: bool = False,
 ):
-    
-    """A script to convert a binary flood extent raster to raster with percent flooded per pixel, gernally at a
-     new resolution.
-     When using `--grid` argument, the raster will be re-aligned to a new grid.
+    """A script to convert a binary flood extent raster to raster with percent flooded per pixel, gernally at a new resolution. When using `--grid` argument, the raster will be re-aligned to a new grid.
 
     Args:
         input_path (str): Absolute path to input file

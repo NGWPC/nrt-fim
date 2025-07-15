@@ -5,42 +5,31 @@ from torchvision.models import efficientnet_b1
 
 
 class Swish(nn.Module):
-    """
-    Swish activation function: x * sigmoid(x)
-    """
+    """Swish activation function: x * sigmoid(x)"""
 
     def forward(self, x):
+        """Swish forward"""
         return x * torch.sigmoid(x)
 
 
 class CustomDecoderBlock(nn.Module):
-    """
-    Custom decoder block with explicit channel counts
-    """
+    """Custom decoder block with explicit channel counts"""
 
-    def __init__(
-        self, in_channels, up_channels, skip_channels, out_channels, device="cpu"
-    ):
-        super(CustomDecoderBlock, self).__init__()
+    def __init__(self, in_channels, up_channels, skip_channels, out_channels, device="cpu"):
+        super().__init__()
         self.device = device
 
         # Here we explicitly define the upsampling output channels
-        self.upsample = nn.ConvTranspose2d(
-            in_channels, up_channels, kernel_size=2, stride=2
-        ).to(device)
+        self.upsample = nn.ConvTranspose2d(in_channels, up_channels, kernel_size=2, stride=2).to(device)
 
         # Calculate concatenated channels
         concat_channels = up_channels + skip_channels
 
-        self.conv1 = nn.Conv2d(
-            concat_channels, out_channels, kernel_size=3, padding=1
-        ).to(device)
+        self.conv1 = nn.Conv2d(concat_channels, out_channels, kernel_size=3, padding=1).to(device)
         self.bn1 = nn.BatchNorm2d(out_channels).to(device)
         self.swish1 = Swish().to(device)
 
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1).to(
-            device
-        )
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1).to(device)
         self.bn2 = nn.BatchNorm2d(out_channels).to(device)
         self.swish2 = Swish().to(device)
 
@@ -55,16 +44,12 @@ class CustomDecoderBlock(nn.Module):
                 nn.init.zeros_(m.bias)
 
     def forward(self, x, skip):
-        # Debugging prints (optional)
-        # print(f"DecoderBlock forward - x: {x.shape}, skip: {skip.shape}")
-
+        """Decoder Block forward function"""
         x_up = self.upsample(x)
         # print(f"After upsample: {x_up.shape}")
 
         if x_up.size()[2:] != skip.size()[2:]:
-            x_up = F.interpolate(
-                x_up, size=skip.shape[2:], mode="bilinear", align_corners=True
-            )
+            x_up = F.interpolate(x_up, size=skip.shape[2:], mode="bilinear", align_corners=True)
             # print(f"After interpolate: {x_up.shape}")
 
         x = torch.cat([x_up, skip], dim=1)
@@ -77,6 +62,8 @@ class CustomDecoderBlock(nn.Module):
 
 
 class FModel(nn.Module):
+    """cnn structure defined here"""
+
     def __init__(self, num_classes=1, in_channels=5, device="cpu"):
         super().__init__()
 
@@ -180,9 +167,7 @@ class FModel(nn.Module):
         self._initialize_weights()
 
     def _initialize_weights(self):
-        """
-        Initialize the weights using Xavier Glorot initialization
-        """
+        """Initialize the weights using Xavier Glorot initialization"""
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.xavier_uniform_(m.weight)
@@ -197,12 +182,18 @@ class FModel(nn.Module):
                     nn.init.zeros_(m.bias)
 
     def forward(self, x):
-        skip_features = []
+        """
+        Cnn forward
 
+        :param x: inputs
+        :return: outputs prediction
+        """
+        skip_features = []
+        _, _, H, W = x.shape
         x = self.initial_conv(x)
         #  print(f"After initial conv: {x.shape}")
 
-        for i, block in enumerate(self.encoder_blocks):
+        for _i, block in enumerate(self.encoder_blocks):
             x = block(x)
             #  print(f"Encoder block {i} output: {x.shape}")
             skip_features.append(x)
@@ -214,6 +205,9 @@ class FModel(nn.Module):
             #  print(f"Before decoder {i}: x={x.shape}, skip={skip_features[4-i].shape}")
             x = block(x, skip_features[4 - i])
             #  print(f"After decoder {i}: {x.shape}")
+
+        ## upsample to the original input size
+        x = F.interpolate(x, size=(H, W), mode="bilinear", align_corners=False)
 
         x = self.final_conv(x)
         x = self.sigmoid(x)

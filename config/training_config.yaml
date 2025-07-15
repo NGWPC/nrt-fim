@@ -6,16 +6,24 @@ version: 0.1.0
 name: ${version}-f1-mvp
 
 data_sources:
-  statistics: /Users/taddbindas/projects/NGWPC/f1_trainer/statistics
+  base_pattern_routing: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/chrtout.zarr/"
+  base_pattern_ldas: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/ldasout.zarr/"
+  base_pattern_precip: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/forcing/precip.zarr"
+  base_pattern_air_temp: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/forcing/t2d.zarr"
+  base_pattern_solar_shortwave: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/forcing/swdown.zarr"
+#  statistics: /Users/farshidrahmani/Library/CloudStorage/OneDrive-ThePennsylvaniaStateUniversity/ASRC/f1_trainer/dataset/statistics
 
 params:
   save_path: ./
 
 train:
-  batch_size: 1
+  batch_size: 12
+  rho: 72   # hours
+  No_pixels_x: 32
+  No_pixels_y: 32
   lr: 0.001
   epochs: 200
 
 np_seed: 1
 seed: 0
-device: mps:0
+device: "mps:0"

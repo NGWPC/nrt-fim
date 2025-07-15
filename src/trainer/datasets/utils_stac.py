@@ -17,6 +17,7 @@ class CustomStacIO(DefaultStacIO):
         super().__init__()
 
     def read_text(self, source: str | Link, *args: Any, **kwargs: Any) -> str:
+        """Reads texts"""
         parsed = urlparse(source)
         if parsed.scheme == "s3":
             bucket = parsed.netloc
@@ -28,6 +29,7 @@ class CustomStacIO(DefaultStacIO):
             return super().read_text(source, *args, **kwargs)
 
     def write_text(self, dest: str | Link, txt: str, *args: Any, **kwargs: Any) -> None:
+        """Writes text"""
         parsed = urlparse(dest)
         if parsed.scheme == "s3":
             bucket = parsed.netloc
@@ -41,6 +43,8 @@ StacIO.set_default(CustomStacIO)
 
 
 class STACReader:
+    """reads from STAC catalog"""
+
     def __init__(
         self, bucket: str = "fimc-data", catalog: str = "s3://fimc-data/benchmark/stac-bench-cat/catalog.json"
     ) -> None:

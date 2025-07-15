@@ -1,178 +1,143 @@
 import logging
-from pathlib import Path
 
 import numpy as np
-import rioxarray
 import torch
 import torch.nn.functional as F
 import xarray as xr
 from omegaconf import DictConfig
 from torch.utils.data import Dataset as TorchDataset
-from tqdm import trange
-
-from trainer.datasets.statistics import get_statistics
 
 log = logging.getLogger(__name__)
 
 
 class train_dataset(TorchDataset):
-    """train_dataset class for handling dataset operations for training dMC models"""
+    """training with NWM retrospective dataset"""
 
     def __init__(self, cfg: DictConfig):
         self.cfg = cfg
 
         # Load and process zarr datasets
-        self.runoff = xr.open_dataset(
-            Path("/Users/taddbindas/projects/NGWPC/f1_trainer/data/sample_dir/router.zarr"),
+        so = {"anon": True, "default_fill_cache": False, "default_cache_type": "none"}
+
+        self.precip = xr.open_dataset(
+            cfg["data_sources"]["base_pattern_precip"],
+            backend_kwargs={"storage_options": so},
+            engine="zarr",
+            chunked_array_type="cubed",
+        ).RAINRATE
+
+        self.air_temp = xr.open_dataset(
+            cfg["data_sources"]["base_pattern_air_temp"],
+            backend_kwargs={"storage_options": so},
+            engine="zarr",
+            chunked_array_type="cubed",
+        ).T2D
+
+        self.solar_shortwave = xr.open_dataset(
+            cfg["data_sources"]["base_pattern_solar_shortwave"],
+            backend_kwargs={"storage_options": so},
+            engine="zarr",
+            chunked_array_type="cubed",
+        ).SWDOWN
+
+        self.ldas = xr.open_dataset(
+            cfg["data_sources"]["base_pattern_ldas"],
+            backend_kwargs={"storage_options": so},
             engine="zarr",
             chunked_array_type="cubed",
         )
-        self.SOIL_M = xr.open_dataset(
-            Path("/Users/taddbindas/projects/NGWPC/f1_trainer/data/sample_dir/soil_moisture.zarr"),
-            engine="zarr",
-            chunked_array_type="cubed",
-        )
+        self.soil_sm_layer1 = self.ldas.SOIL_M.sel(soil_layers_stag=0)
+        self.soil_sm_layer2 = self.ldas.SOIL_M.sel(soil_layers_stag=1)
+        self.soil_sm_layer3 = self.ldas.SOIL_M.sel(soil_layers_stag=2)
+        self.soil_sm_layer4 = self.ldas.SOIL_M.sel(soil_layers_stag=3)
 
-        self.obs = rioxarray.open_rasterio(
-            Path("/Users/taddbindas/projects/NGWPC/f1_trainer/data/sample_dir/flood_percent_250m.tif"),
-            chunked_array_type="cubed",
-        )
-        self.flow_acc = rioxarray.open_rasterio(
-            Path("/Users/taddbindas/projects/NGWPC/f1_trainer/data/sample_dir/flow_acc_250m.tif"),
-            chunked_array_type="cubed",
-        )
-        self.flow_dir = rioxarray.open_rasterio(
-            Path("/Users/taddbindas/projects/NGWPC/f1_trainer/data/sample_dir/flow_dir_250m.tif"),
-            chunked_array_type="cubed",
-        )
-        self.surface_extent = rioxarray.open_rasterio(
-            Path("/Users/taddbindas/projects/NGWPC/f1_trainer/data/sample_dir/surface_extent_250m.tif"),
-            chunked_array_type="cubed",
-        )
+        self.SNOWH = self.ldas.SNOWH
 
-        self.statistics = get_statistics(
-            self.cfg,
-            {
-                "runoff": self.runoff,
-                "SOIL_M": self.SOIL_M,
-                "obs": self.obs,
-                "flow_acc": self.flow_acc,
-                "flow_dir": self.flow_dir,
-                "surface_extent": self.surface_extent,
-            },
-        )
-
-        static_inputs = self.process_static_inputs()
-        runoff_inputs = self.process_dynamic_inputs(self.runoff, "runoff", self.statistics["runoff"])
-        soil_moisture_inputs = self.process_dynamic_inputs(self.SOIL_M, "SOIL_M", self.statistics["SOIL_M"])
-        self.observations = self.process_obs(self.statistics["obs"])
-        self.inputs = torch.cat([static_inputs, runoff_inputs, soil_moisture_inputs], dim=0)
+        self.ugd_runoff = self.ldas.UGDRNOFF
 
     def __len__(self) -> int:
         """Returns the total number of gauges."""
-        return 1
+        return self.cfg["train"]["batch_size"]
 
-    def __getitem__(self, idx) -> tuple[int, str, str]:
-        return idx
+    def __getitem__(self, idx) -> tuple[torch.Tensor, torch.Tensor]:
+        t_hourly = self.cfg["train"]["rho"]
+        # t_3hourly = t_hourly // 3
+        y_size, x_size = self.cfg["train"]["No_pixels_y"], self.cfg["train"]["No_pixels_x"]
 
-    def process_obs(self, statistics):
-        # Squeeze to 2D space
-        obs_array = self.obs.values.squeeze()
+        # Max valid end time (must be ≥ window size)
+        max_end_hourly = self.precip.sizes["time"]
+        max_end_3hourly = self.ldas.sizes["time"]
+        max_end = min(max_end_hourly, max_end_3hourly * 3)
 
-        obs_mean = statistics.loc[2]  # mean is at index 2
-        obs_std = statistics.loc[3]  # std is at index 3
-        obs_norm = (obs_array - obs_mean) / (obs_std + 1e-8)
+        min_end = t_hourly  # must allow slicing back `t_hourly` steps
+        end_time_index = np.random.randint(min_end, max_end)
 
-        obs_norm = np.nan_to_num(obs_norm, nan=0.0)
-        obs_np_array = np.array(obs_norm)
-        return torch.tensor(obs_np_array, dtype=torch.float32, device=self.cfg.device)
+        max_y = self.precip.sizes["y"] - y_size
+        max_x = self.precip.sizes["x"] - x_size
 
-    def process_dynamic_inputs(self, input_var, name, statistics):
-        arr = []
-        for i in trange(input_var.sizes["time"], desc="Normalizing dynamic inputs", ascii=True, ncols=80):
-            data = input_var.isel(time=i)
-            # data = data.rio.to_crs(self.obs.rio.crs)
-            matched_data = data.rio.reproject_match(self.obs)
-            input_data = matched_data[name].values.squeeze()
-            input_data_mean = statistics.loc[2]  # mean is at index 2
-            input_data_std = statistics.loc[3]  # std is at index 3
-            input_data_norm = (input_data - input_data_mean) / (input_data_std + 1e-8)
-            input_data_norm = np.nan_to_num(input_data_norm, nan=0.0)
-            arr.append(input_data_norm)
-        data_array = np.array(arr)
-        return torch.tensor(data_array, dtype=torch.float32, device=self.cfg.device)
+        y = np.random.randint(0, max_y + 1)
+        x = np.random.randint(0, max_x + 1)
 
-    def process_static_inputs(self):
-        flow_acc_match = self.flow_acc.rio.reproject_match(self.obs)
-        flow_dir_match = self.flow_dir.rio.reproject_match(self.obs)
-        surface_extent_match = self.surface_extent.rio.reproject_match(self.obs)
+        return self.align_and_stack(end_time_index, y, x)
 
-        # Squeeze to 2D space
-        flow_acc_array = flow_acc_match.values.squeeze()
-        flow_dir_array = flow_dir_match.values.squeeze()
-        surface_extent_array = surface_extent_match.values.squeeze()
-
-        # Mean/std normalization for all features using self.statistics
-        # Flow accumulation normalization
-        flow_acc_mean = self.statistics.loc[2, "flow_acc"]  # mean is at index 2
-        flow_acc_std = self.statistics.loc[3, "flow_acc"]  # std is at index 3
-        flow_acc_norm = (flow_acc_array - flow_acc_mean) / (flow_acc_std + 1e-8)
-
-        # Flow direction normalization
-        flow_dir_mean = self.statistics.loc[2, "flow_dir"]
-        flow_dir_std = self.statistics.loc[3, "flow_dir"]
-        flow_dir_norm = (flow_dir_array - flow_dir_mean) / (flow_dir_std + 1e-8)
-
-        # Surface extent normalization
-        surface_extent_mean = self.statistics.loc[2, "surface_extent"]
-        surface_extent_std = self.statistics.loc[3, "surface_extent"]
-        surface_extent_norm = (surface_extent_array - surface_extent_mean) / (surface_extent_std + 1e-8)
-
-        # Replace NaNs with zeros
-        flow_acc_norm = np.nan_to_num(flow_acc_norm, nan=0.0)
-        flow_dir_norm = np.nan_to_num(flow_dir_norm, nan=0.0)
-        surface_extent_norm = np.nan_to_num(surface_extent_norm, nan=0.0)
-
-        input_channels = []
-
-        # Add static features
-        input_channels.append(flow_acc_norm)
-        input_channels.append(flow_dir_norm)
-        input_channels.append(surface_extent_norm)
-        input_array = np.array(input_channels)
-        return torch.tensor(input_array, dtype=torch.float32, device=self.cfg.device)
-
-    def collate_fn(self, _):
+    def extract_patch(self, xr_array, time_index, y, x, t_len, y_size, x_size):
         """
-        Process and normalize raster data for UNet input with proper dimensioning for 250m resolution data
+        Clip xr dataset based on time and x, and y
 
-        Returns
-        -------
-            tuple: (input_tensor, target_tensor)
+        :param xr_array: dataset (can be input or target)
+        :param time_index: time
+        :param y: y
+        :param x: x
+        :param t_len: time winod of the dataset that we want to use
+        :param y_size: number of pixels in y for clipping
+        :param x_size: number of pixels in x for clipping
+        :return: xarray clipped dataset
         """
-        input_tensor = self.inputs  # Shape: [149, 477, 240] (channels, height, width)
+        return xr_array.isel(
+            time=slice(time_index, time_index + t_len),
+            y=slice(y, y + y_size),
+            x=slice(x, x + x_size),
+        )
 
-        # Get target tensor from observations (assuming this is the obs raster)
-        # Extract data and ensure it's properly shaped
-        target_tensor = self.observations.unsqueeze(0)
+    def align_and_stack(self, end_time_index, y, x):
+        """
+        Aligns different inputs which are in different time steps, and concatenate them at the end.
 
-        # Make dimensions divisible by 32 (for 5 encoder/decoder blocks)
-        h, w = input_tensor.shape[1], input_tensor.shape[2]
-        pad_h = (32 - h % 32) % 32
-        pad_w = (32 - w % 32) % 32
+        :param end_time_index: last time index when sampling
+        :param y: y in the lower left corner of the sampled input image
+        :param x: x in the lower left corner of the sampled input image
+        :return: input and target tensors
+        """
+        t_hourly = self.cfg["train"]["rho"]
+        t_3hourly = t_hourly // 3
+        y_size, x_size = self.cfg["train"]["No_pixels_y"], self.cfg["train"]["No_pixels_x"]
+
+        start_time_index = end_time_index - t_hourly
+        # ldas_end = end_time_index // 3
+        ldas_start = start_time_index // 3
+
+        precip = self.extract_patch(self.precip, start_time_index, y, x, t_hourly, y_size, x_size)
+        air_temp = self.extract_patch(self.air_temp, start_time_index, y, x, t_hourly, y_size, x_size)
+        solar = self.extract_patch(self.solar_shortwave, start_time_index, y, x, t_hourly, y_size, x_size)
+
+        sm1 = self.extract_patch(self.soil_sm_layer1, ldas_start, y, x, t_3hourly, y_size, x_size)
+        sm2 = self.extract_patch(self.soil_sm_layer2, ldas_start, y, x, t_3hourly, y_size, x_size)
+        sm3 = self.extract_patch(self.soil_sm_layer3, ldas_start, y, x, t_3hourly, y_size, x_size)
+        sm4 = self.extract_patch(self.soil_sm_layer4, ldas_start, y, x, t_3hourly, y_size, x_size)
+        snowh = self.extract_patch(self.SNOWH, ldas_start, y, x, t_3hourly, y_size, x_size)
+        ugd = self.extract_patch(self.ugd_runoff, ldas_start, y, x, t_3hourly, y_size, x_size)
+
+        input_vars = [precip, air_temp, solar, sm1, sm2, sm3, sm4, snowh]
+        input_tensor = torch.cat([torch.tensor(var.values, dtype=torch.float32) for var in input_vars], dim=0)
+        target_tensor = torch.tensor(ugd.values, dtype=torch.float32)
+
+        # 🔽 Make H and W divisible by 32
+        _, H, W = input_tensor.shape
+        pad_h = (32 - H % 32) % 32
+        pad_w = (32 - W % 32) % 32
 
         if pad_h > 0 or pad_w > 0:
-            # Pad inputs and targets
-            input_tensor = torch.nn.functional.pad(input_tensor, (0, pad_w, 0, pad_h))
-            target_tensor = torch.nn.functional.pad(target_tensor, (0, pad_w, 0, pad_h))
+            input_tensor = F.pad(input_tensor, (0, pad_w, 0, pad_h))  # (left, right, top, bottom)
+            target_tensor = F.pad(target_tensor, (0, pad_w, 0, pad_h))
 
-        # Add batch dimension
-        input_tensor = input_tensor.unsqueeze(0)  # [1, channels, H, W]
-        target_tensor_resized = F.interpolate(
-            target_tensor.unsqueeze(0),  # Add batch dim
-            size=(240, 128),
-            mode="bilinear",
-            align_corners=True,
-        )  # Remove extra batch dim
-
-        return input_tensor, target_tensor_resized
+        return input_tensor, target_tensor[-1:, :, :]

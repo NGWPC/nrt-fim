@@ -25,7 +25,7 @@ def read(start_time: datetime, end_time: datetime):
     tuple[xr.Dataset, xr.Dataset]
         Routing and Soil moisture datasets
     """
-    so = dict(anon=True, default_fill_cache=False, default_cache_type="none")
+    so = {"anon": True, "default_fill_cache": False, "default_cache_type": "none"}
 
     base_pattern_routing = "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/chrtout.zarr/"
     base_pattern_sm = "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/ldasout.zarr/"
@@ -113,19 +113,22 @@ def rasterize(
     dtype: np.dtype | str,
     nodata_value: int | float = None,
 ) -> None:
-    """A wrapper around xarray/geocube to convert a vector file or geopandas dataframe into a raster
-    where the value comes from the vector's 'attriubte'
+    """
+    A wrapper around xarray/geocube to convert a vector file or geopandas dataframe into a raster where the value comes from the vector's 'attribute'.
 
     Args:
-        input_vector: A vector dataset as a file or geopandas geodataframe
-        output_raster: Output path for raster file
-        resolution: resolution of cells
-        attribute: column name for value to rasterize
-        crs: A spatial coordinate reference system either as a pyproj class, 'ESPG:####', or as int (e.g 4326)
-        dtype: Specify a numpy datatype for the raster. 
-        nodata_value: Value to use for no data in raste. Defaults to None.
+    :param input_vector: A vector dataset as a file or geopandas GeoDataFrame.
+    :param output_raster: Output path for the raster file.
+    :param resolution: Resolution of cells.
+    :param attribute: Column name for the value to rasterize.
+    :param crs: A spatial coordinate reference system either as a pyproj object, 'EPSG:####' string, or integer (e.g., 4326).
+    :param dtype: Numpy data type for the raster.
+    :param nodata_value:
+    :return: Value to use for no data in the raster. Defaults to None.
     """
-    ds = make_geocube(input_vector, measurements=[attribute], resolution=(-resolution, resolution), output_crs=crs)
+    ds = make_geocube(
+        input_vector, measurements=[attribute], resolution=(-resolution, resolution), output_crs=crs
+    )
 
     if nodata_value is not None:
         ds[attribute] = ds[attribute].rio.write_nodata(nodata_value)
