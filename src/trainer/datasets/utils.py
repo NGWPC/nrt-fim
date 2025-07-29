@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -5,9 +6,15 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pyproj
+import rasterio
 import xarray as xr
 from geocube.api.core import make_geocube
 from matplotlib.colors import LinearSegmentedColormap
+from rasterio.crs import CRS
+from rasterio.merge import merge
+from rasterio.transform import from_origin
+
+log = logging.getLogger(__name__)
 
 
 def read(start_time: datetime, end_time: datetime):
@@ -142,3 +149,145 @@ def rasterize(
 #     start_time = datetime.strptime("20190520 000000", "%Y%m%d %H%M%S")
 #     end_time = datetime.strptime("20190602 230000", "%Y%m%d %H%M%S")
 #     read(start_time, end_time)
+
+
+def create_master_from_da(
+    da,
+    master_path: str,
+    resolution: float = 250.0,
+    nodata: float = np.nan,
+    dtype: str = "float32",
+    compress: str = "lzw",
+):
+    """
+    Create a blank GeoTIFF grid at `resolution` covering the full extent of `da`.
+    - da must have .x and .y coordinates in projected units (e.g. meters).
+    - da must carry its CRS either in da.rio.crs, da.attrs['esri_pe_string'], or da.attrs['proj4'].
+    """
+    # 1) grab spatial bounds
+    left = float(da.x.min())
+    right = float(da.x.max())
+    bottom = float(da.y.min())
+    top = float(da.y.max())
+
+    # 2) compute output size
+    width = int(np.ceil((right - left) / resolution))
+    height = int(np.ceil((top - bottom) / resolution))
+
+    # 3) build Affine transform (upper-left corner)
+    transform = from_origin(left, top, resolution, resolution)
+
+    # 4) detect CRS
+    crs = None
+
+    # 4a) try rioxarray accessor
+    try:
+        crs = da.rio.crs
+    except Exception:
+        crs = None
+
+    # 4b) fallback to ESRI WKT (esri_pe_string or spatial_ref)
+    if crs is None:
+        wkt = da.attrs.get("esri_pe_string") or da.attrs.get("spatial_ref")
+        if wkt:
+            try:
+                crs = CRS.from_wkt(wkt)
+            except Exception as e:
+                log.warning(f"Failed to parse WKT CRS: {e}; will try PROJ4 next")
+
+    # 4c) fallback to PROJ4 string
+    if crs is None:
+        proj4 = da.attrs.get("proj4")
+        if proj4:
+            try:
+                crs = CRS.from_string(proj4)
+            except Exception as e:
+                log.warning(f"Failed to parse PROJ4 CRS: {e}; will default to EPSG:4326")
+
+    # 4d) final default
+    if crs is None:
+        log.warning("No CRS found on DataArray; defaulting to EPSG:4326")
+        crs = CRS.from_epsg(4326)
+
+    # 5) write blank raster
+    profile = {
+        "driver": "GTiff",
+        "dtype": dtype,
+        "count": 1,
+        "crs": crs,
+        "transform": transform,
+        "width": width,
+        "height": height,
+        "nodata": nodata,
+        "compress": compress,
+    }
+
+    with rasterio.open(master_path, "w", **profile) as dst:
+        blank = np.full((height, width), nodata, dtype=np.dtype(dtype))
+        dst.write(blank, 1)
+
+    print(f"→ Master grid written to {master_path}")
+
+
+def merge_rasters(input_paths: list[str], output_path: str) -> None:
+    """
+    Merge multiple GeoTIFFs into a single continuous raster, ensuring matching CRS, resolution, compression, and dtype (to minimize output size).
+
+    Args:
+        input_paths: List of file paths to GeoTIFFs to merge. They must share the same CRS and pixel resolution.
+        output_path: Path for the merged output GeoTIFF.
+    """
+    import rasterio
+
+    # Open all source datasets
+    src_files = [rasterio.open(p) for p in input_paths]
+    try:
+        # Base metadata from the first file
+        base_meta = src_files[0].meta.copy()
+        # base_crs = base_meta["crs"]
+        # base_res = (base_meta["transform"].a, -base_meta["transform"].e)
+
+        # Inherit compression, predictor, and dtype
+        out_compress = base_meta.get("compress")
+        out_predictor = base_meta.get("predictor")
+        out_dtype = base_meta.get("dtype")
+        # If inputs are uncompressed, default to LZW for output to save space
+        if not out_compress:
+            out_compress = "lzw"
+            out_predictor = 2  # good for float data
+
+        # Validate CRS and resolution match across inputs
+
+        mosaic, out_trans = merge(src_files)
+
+        # Update metadata for output
+        out_meta = base_meta
+        out_meta.update(
+            {
+                "height": mosaic.shape[1],
+                "width": mosaic.shape[2],
+                "transform": out_trans,
+                "dtype": out_dtype,
+            }
+        )
+        if out_compress:
+            out_meta["compress"] = out_compress
+        if out_predictor:
+            out_meta["predictor"] = out_predictor
+
+        # Write merged raster, casting to original dtype
+        with rasterio.open(output_path, "w", **out_meta) as dest:
+            dest.write(mosaic.astype(out_dtype))
+    finally:
+        for src in src_files:
+            src.close()
+
+
+if __name__ == "__main__":
+    merge_rasters(
+        input_paths=[
+            r"/Users/farshidrahmani/Dataset/F1_MODIS_USA/DFO_3625_From_20100310_to_20100324/DFO_3625_From_20100310_to_201003240000000000-0000014848.tif",
+            r"/Users/farshidrahmani/Dataset/F1_MODIS_USA/DFO_3625_From_20100310_to_20100324/DFO_3625_From_20100310_to_201003240000000000-0000000000.tif",
+        ],
+        output_path=r"/Users/farshidrahmani/Dataset/F1_MODIS_USA/DFO_3625_From_20100310_to_20100324/DFO_3625_From_20100310_to_20100324_merged.tif",
+    )

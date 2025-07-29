@@ -45,7 +45,47 @@ def training_loop(cfg, nn):
         drop_last=True,
     )
 
+    lr = cfg.train.lr    """
+    Main loop for training nn
+
+    :param cfg: Configuration file
+    :param nn: neural network defined in main
+    :return: None
+    """
+    dataset = train_dataset(cfg=cfg)
+
+    dataloader = DataLoader(
+        dataset=dataset,
+        batch_size=cfg.train.batch_size,
+        num_workers=0,
+        drop_last=True,
+    )
+
     lr = cfg.train.lr
+
+    optimizer = torch.optim.Adam(params=nn.parameters(), lr=lr)
+
+    for epoch in range(0, cfg.train.epochs + 1):
+        nn.train()
+
+        for i, mini_batch in enumerate(dataloader, start=0):
+            inputs, target = mini_batch
+            inputs, target = inputs.to(cfg.device), target.to(cfg.device)
+            optimizer.zero_grad()
+            pred = nn(inputs)
+
+            loss = mse_loss(
+                input=pred,
+                target=target,
+            )
+
+            log.info("Running backpropagation")
+
+            loss.backward()
+            optimizer.step()
+
+            log.info(f"Epoch {epoch}, Batch {i}, Loss: {loss.item():.6f}")
+
 
     optimizer = torch.optim.Adam(params=nn.parameters(), lr=lr)
 

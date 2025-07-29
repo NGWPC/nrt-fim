@@ -11,18 +11,25 @@ data_sources:
   base_pattern_precip: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/forcing/precip.zarr"
   base_pattern_air_temp: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/forcing/t2d.zarr"
   base_pattern_solar_shortwave: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/forcing/swdown.zarr"
-#  statistics: /Users/farshidrahmani/Library/CloudStorage/OneDrive-ThePennsylvaniaStateUniversity/ASRC/f1_trainer/dataset/statistics
+  dfo_modis_dir: "/Users/farshidrahmani/Dataset/F1_MODIS_USA"
+#  statistics_dir: /Users/farshidrahmani/Library/CloudStorage/OneDrive-ThePennsylvaniaStateUniversity/ASRC/f1_trainer/dataset/statistics
+
+master_grids_dir: "/Users/farshidrahmani/Dataset/master_grids_dir"
 
 params:
   save_path: ./
+  resolution: 250    # this will be the resolution of images. All inputs and outputs will be re-gridded to this res
+  overwrite_click: False    # False means not to overwrite the processed files on the raw modis files.
 
 train:
   batch_size: 12
   rho: 72   # hours
-  No_pixels_x: 32
-  No_pixels_y: 32
+  No_pixels_x: 50
+  No_pixels_y: 64
   lr: 0.001
   epochs: 200
+  start_time: 20101001   # YYYYMMDD
+  end_time: 20101002     # YYYYMMDD
 
 np_seed: 1
 seed: 0

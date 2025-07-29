@@ -11,6 +11,8 @@ from rasterio import shutil as rio_shutil
 from rasterio.enums import Resampling
 from rasterio.vrt import WarpedVRT
 
+rasterio.env.logging.getLogger("rasterio._env").setLevel("ERROR")
+
 
 def calculate_flood_percentage(raster: xr.DataArray, target_resolution: int | float = 250) -> xr.DataArray:
     """Converts a flood extent raster to a raster where each pixel represents % of pixels flooded when the dataset is resampled.
@@ -43,7 +45,8 @@ def calculate_flood_percentage(raster: xr.DataArray, target_resolution: int | fl
     data = raster.values
 
     # For each band
-    for b in range(raster.rio.count):
+    # for b in range(raster.rio.count):
+    for b in range(1):  # just for the first band
         # Get the band data
         band_data = data[b]
 
@@ -92,7 +95,7 @@ def calculate_flood_percentage(raster: xr.DataArray, target_resolution: int | fl
 
 @click.command(
     name="Generate Flood Percent",
-    help="A tool to conver binary flood extent rasters to percent of cell flooded at new resolution.",
+    help="A tool to convert binary flood extent rasters to percent of cell flooded at new resolution.",
 )
 @click.argument(
     "input_path",
@@ -123,7 +126,7 @@ def generate_flood_percent(
     resolution: int | float = None,
     overwrite: bool = False,
 ):
-    """A script to convert a binary flood extent raster to raster with percent flooded per pixel, gernally at a new resolution. When using `--grid` argument, the raster will be re-aligned to a new grid.
+    """A script to convert a binary flood extent raster to raster with percent flooded per pixel, genernally at a new resolution. When using `--grid` argument, the raster will be re-aligned to a new grid.
 
     Args:
         input_path (str): Absolute path to input file
@@ -166,7 +169,7 @@ def generate_flood_percent(
 
     # set target resolution to input else use the raster's x-res
     # if the raster had non-square cells, the output will be square
-    target_resolution = resolution if resolution else ras.rio.resolution[0]
+    target_resolution = resolution if resolution else ras.rio.resolution()[0]
 
     flood_percent = calculate_flood_percentage(ras, target_resolution=target_resolution)
     flood_percent.rio.to_raster(temp_ras)
@@ -203,3 +206,10 @@ def generate_flood_percent(
 
 if __name__ == "__main__":
     generate_flood_percent()
+
+# if __name__ == "__main__":
+#     generate_flood_percent(input_path='/Users/farshidrahmani/Dataset/F1_MODIS_USA/DFO_3625_From_20100310_to_20100324/DFO_3625_From_20100310_to_20100324_merged.tif',
+#                            output_path='/Users/farshidrahmani/Dataset/F1_MODIS_USA_perc_regrid/DFO_3625_From_20100310_to_20100324/DFO_3625_From_20100310_to_20100324_merged.tif',
+#                            grid='/Users/farshidrahmani/Dataset/master_grids_dir/master_250m.tif',
+#                            resolution=250
+#                            )
