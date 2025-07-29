@@ -8,13 +8,12 @@ import numpy as np
 import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
-from torch.nn.functional import mse_loss
 from torch.utils.data import DataLoader
 
 from trainer import FModel
 from trainer._version import __version__
 from trainer.datasets.train_dataset import train_dataset
-from trainer.datasets.utils import save_state
+from trainer.datasets.utils import save_prediction_image
 
 log = logging.getLogger(__name__)
 
@@ -29,26 +28,8 @@ def _set_seed(cfg: DictConfig) -> None:
     random.seed(cfg.seed)
 
 
-def training_loop(cfg, nn):
+def evaluate(cfg, nn):
     """
-    Main loop for training nn
-
-    :param cfg: Configuration file
-    :param nn: neural network defined in main
-    :return: None
-    """
-    data_generator = torch.Generator()
-    data_generator.manual_seed(cfg.seed)
-    dataset = train_dataset(cfg=cfg)
-
-    dataloader = DataLoader(
-        dataset=dataset,
-        batch_size=cfg.train.batch_size,
-        num_workers=0,
-        drop_last=True,
-    )
-
-    lr = cfg.train.lr    """
     Main loop for training nn
 
     :param cfg: Configuration file
@@ -59,69 +40,39 @@ def training_loop(cfg, nn):
 
     dataloader = DataLoader(
         dataset=dataset,
-        batch_size=cfg.train.batch_size,
+        batch_size=1,
         num_workers=0,
         drop_last=True,
     )
 
-    lr = cfg.train.lr
+    if cfg.experiment.checkpoint:
+        file_path = Path(cfg.experiment.checkpoint)
+        device = torch.device(cfg.device)
+        log.info(f"Loading nn from checkpoint: {file_path.stem}")
+        state = torch.load(file_path, map_location=device)
+        state_dict = state["model_state_dict"]
+        for key in state_dict.keys():
+            state_dict[key] = state_dict[key].to(device)
+        nn.load_state_dict(state_dict)
 
-    optimizer = torch.optim.Adam(params=nn.parameters(), lr=lr)
+    else:
+        log.warning("Creating new model for evaluation.")
 
-    for epoch in range(0, cfg.train.epochs + 1):
-        nn.train()
-
-        for i, mini_batch in enumerate(dataloader, start=0):
-            inputs, target = mini_batch
-            inputs, target = inputs.to(cfg.device), target.to(cfg.device)
-            optimizer.zero_grad()
-            pred = nn(inputs)
-
-            loss = mse_loss(
-                input=pred,
-                target=target,
-            )
-
-            log.info("Running backpropagation")
-
-            loss.backward()
-            optimizer.step()
-
-            log.info(f"Epoch {epoch}, Batch {i}, Loss: {loss.item():.6f}")
-
-            save_state(
-                epoch=epoch,
-                generator=data_generator,
-                mini_batch=i,
-                mlp=nn,
-                optimizer=optimizer,
-                name=cfg.name,
-                saved_model_path=cfg.params.save_path / "saved_models",
-            )
-
-
-    optimizer = torch.optim.Adam(params=nn.parameters(), lr=lr)
-
-    for epoch in range(0, cfg.train.epochs + 1):
-        nn.train()
+    with torch.no_grad():  # Disable gradient calculations during evaluation
+        nn.eval()
 
         for i, mini_batch in enumerate(dataloader, start=0):
             inputs, target = mini_batch
             inputs, target = inputs.to(cfg.device), target.to(cfg.device)
-            optimizer.zero_grad()
             pred = nn(inputs)
 
-            loss = mse_loss(
-                input=pred,
-                target=target,
+            save_prediction_image(
+                pred,
+                epoch=0,
+                save_dir=cfg.params.save_path / f"output_mb_{i}",
+                statistics=dataset.statistics["obs"],
+                batch=i,
             )
-
-            log.info("Running backpropagation")
-
-            loss.backward()
-            optimizer.step()
-
-            log.info(f"Epoch {epoch}, Batch {i}, Loss: {loss.item():.6f}")
 
 
 @hydra.main(
@@ -140,12 +91,12 @@ def main(cfg: DictConfig) -> None:
     cfg.params.save_path = Path(HydraConfig.get().run.dir)
     (cfg.params.save_path / "plots").mkdir(exist_ok=True)
     (cfg.params.save_path / "saved_models").mkdir(exist_ok=True)
+    start_time = time.perf_counter()
     try:
-        start_time = time.perf_counter()
         nn = FModel(
             num_classes=1, in_channels=336, device=cfg.device
         )  # Dynamic = (73 * 2); Static = 3; Total = 149
-        training_loop(cfg=cfg, nn=nn)
+        evaluate(cfg=cfg, nn=nn)
 
     except KeyboardInterrupt:
         print("Keyboard interrupt received")
@@ -158,5 +109,5 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    print(f"Training F-Model with version: {__version__}")
+    print(f"Evaluating F-Model with version: {__version__}")
     main()

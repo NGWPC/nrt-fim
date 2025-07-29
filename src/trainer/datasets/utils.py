@@ -6,6 +6,7 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pyproj
+import torch
 import rasterio
 import xarray as xr
 from geocube.api.core import make_geocube
@@ -143,6 +144,75 @@ def rasterize(
     options = {"compress": "LZW", "tiled": "TRUE", "dtype": dtype}
 
     ds[attribute].rio.to_raster(output_raster, **options)
+
+
+def save_state(
+    epoch: int,
+    generator: torch.Generator,
+    mini_batch: int,
+    mlp: torch.nn.Module,
+    optimizer: torch.nn.Module,
+    name: str,
+    saved_model_path: Path,
+) -> None:
+    """Save model state
+
+    Parameters
+    ----------
+    epoch : int
+        The epoch number
+    mini_batch : int
+        The mini batch number
+    mlp : nn.Module
+        The MLP model
+    optimizer : nn.Module
+        The optimizer
+    loss_idx_value : int
+        The loss index value
+    name: str
+        The name of the file we're saving
+    """
+    mlp_state_dict = {key: value.cpu() for key, value in mlp.state_dict().items()}
+    cpu_optimizer_state_dict = {}
+    for key, value in optimizer.state_dict().items():
+        if key == "state":
+            cpu_optimizer_state_dict[key] = {}
+            for param_key, param_value in value.items():
+                cpu_optimizer_state_dict[key][param_key] = {}
+                for sub_key, sub_value in param_value.items():
+                    if torch.is_tensor(sub_value):
+                        cpu_optimizer_state_dict[key][param_key][sub_key] = sub_value.cpu()
+                    else:
+                        cpu_optimizer_state_dict[key][param_key][sub_key] = sub_value
+        elif key == "param_groups":
+            cpu_optimizer_state_dict[key] = []
+            for param_group in value:
+                cpu_param_group = {}
+                for param_key, param_value in param_group.items():
+                    cpu_param_group[param_key] = param_value
+                cpu_optimizer_state_dict[key].append(cpu_param_group)
+        else:
+            cpu_optimizer_state_dict[key] = value
+
+    state = {
+        "model_state_dict": mlp_state_dict,
+        "optimizer_state_dict": cpu_optimizer_state_dict,
+        "rng_state": torch.get_rng_state(),
+        "data_generator_state": generator.get_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda_rng_state"] = torch.cuda.get_rng_state()
+    if mini_batch == -1:
+        state["epoch"] = epoch + 1
+        state["mini_batch"] = 0
+    else:
+        state["epoch"] = epoch
+        state["mini_batch"] = mini_batch
+
+    torch.save(
+        state,
+        saved_model_path / f"_{name}_epoch_{state['epoch']}_mb_{state['mini_batch']}.pt",
+    )
 
 
 # if __name__ == "__main__":
