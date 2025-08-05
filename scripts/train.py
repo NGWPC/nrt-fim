@@ -44,23 +44,7 @@ def training_loop(cfg, nn):
     dataloader = DataLoader(
         dataset=dataset,
         batch_size=cfg.train.batch_size,
-        num_workers=0,
-        drop_last=True,
-    )
-
-    lr = cfg.train.lr    """
-    Main loop for training nn
-
-    :param cfg: Configuration file
-    :param nn: neural network defined in main
-    :return: None
-    """
-    dataset = train_dataset(cfg=cfg)
-
-    dataloader = DataLoader(
-        dataset=dataset,
-        batch_size=cfg.train.batch_size,
-        num_workers=0,
+        num_workers=cfg.train.num_workers,
         drop_last=True,
     )
 
@@ -98,7 +82,6 @@ def training_loop(cfg, nn):
                 name=cfg.name,
                 saved_model_path=cfg.params.save_path / "saved_models",
             )
-
 
     optimizer = torch.optim.Adam(params=nn.parameters(), lr=lr)
 
@@ -143,7 +126,7 @@ def main(cfg: DictConfig) -> None:
     try:
         start_time = time.perf_counter()
         nn = FModel(
-            num_classes=1, in_channels=336, device=cfg.device
+            num_classes=int(cfg.model.num_classes), in_channels=int(cfg.model.in_channels), device=cfg.device
         )  # Dynamic = (73 * 2); Static = 3; Total = 149
         training_loop(cfg=cfg, nn=nn)
 

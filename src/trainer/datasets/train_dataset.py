@@ -1,8 +1,10 @@
 import glob
 import logging
 import os
+import random
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -26,11 +28,19 @@ log = logging.getLogger(__name__)
 
 
 class train_dataset(TorchDataset):
-    """training with NWM retrospective dataset"""
+    """training with NWM retrospective dataset. it can be used for testing as well"""
 
-    def __init__(self, cfg: DictConfig):
+    def __init__(self, cfg: DictConfig, mode: Literal["train", "test", "train_test"] = "train"):
         self.cfg = cfg
+        if not isinstance(mode, str):
+            raise TypeError(f"mode must be a str, got {type(mode)}")
+        mode = mode.lower()
+        if mode not in ("train", "test", "train_test"):
+            raise ValueError(f"mode must be 'train' or 'test', got {mode!r}")
+        self.mode = mode
+
         self.OnlineStats = OnlineStats()  # to calculate statistics of the data
+
         # Load and process zarr datasets
         so = {"anon": True, "default_fill_cache": False, "default_cache_type": "none"}
 
@@ -46,22 +56,23 @@ class train_dataset(TorchDataset):
         # self.precip.name = "precip"
         self.hourly_time = self.precip.time.values
 
+        # --- Load air temperature dataset ---
         self.air_temp = xr.open_dataset(
             cfg["data_sources"]["base_pattern_air_temp"],
             backend_kwargs={"storage_options": so},
             engine="zarr",
             chunked_array_type="cubed",
         ).T2D
-        # self.air_temp.name = "air_temp"
 
+        # --- Load shortwave solar radiation dataset ---
         self.solar_shortwave = xr.open_dataset(
             cfg["data_sources"]["base_pattern_solar_shortwave"],
             backend_kwargs={"storage_options": so},
             engine="zarr",
             chunked_array_type="cubed",
         ).SWDOWN
-        # self.solar_shortwave.name = "solar_shortwave"
 
+        # --- Load soil moisture dataset fro all layers ---
         self.ldas = xr.open_dataset(
             cfg["data_sources"]["base_pattern_ldas"],
             backend_kwargs={"storage_options": so},
@@ -80,11 +91,11 @@ class train_dataset(TorchDataset):
         self.soil_sm_layer4.name = "soil_sm_layer4"
         self.three_hourly_time = self.soil_sm_layer1.time.values
 
+        # --- Load snow dataset ---
         self.SNOWH = self.ldas.SNOWH
-        # self.SNOWH.name = "SNOWH"
 
+        # --- Load underground runoff dataset ---
         self.ugd_runoff = self.ldas.UGDRNOFF
-        # self.ugd_runoff.name = "ugd_runoff"
 
         # create a master grid from inputs
         # build the master‐grid path
@@ -111,13 +122,21 @@ class train_dataset(TorchDataset):
 
         # pre-processing the satellite data with scripts/flood_percent_raster.py CLI, to get percentage and to regrid
         print("starting satellite images pre-prcoessing!")
-        self.MODIS_paths = preprocess_modis(self.cfg, self.raw_modis_paths[:5], grid=self.master_path)
+        self.MODIS_paths_all = preprocess_modis(self.cfg, self.raw_modis_paths[:5], grid=self.master_path)
         print("satellite images pre-prcoessing done!")
 
+        self.MODIS_paths_train, self.MODIS_paths_test = self.split_paths(self.MODIS_paths_all)
+
         # --- Compute and store bounding boxes keyed by floodID ---
-        self.modis_bboxes = self._compute_modis_bboxes(self.MODIS_paths, self.input_crs)
+        if self.mode == "train":
+            self.obs_paths = self.MODIS_paths_train
+        elif self.mode == "test":
+            self.obs_paths = self.MODIS_paths_test
+        elif self.mode == "train_test":
+            self.obs_paths = self.MODIS_paths_all
+        self.modis_bboxes = self._compute_modis_bboxes(self.obs_paths, self.input_crs)
         self.flood_ids = list(self.modis_bboxes.keys())
-        event_ending_time_str = [Path(p).name.split("_to_")[1][:8] for p in self.MODIS_paths]
+        event_ending_time_str = [Path(p).name.split("_to_")[1][:8] for p in self.obs_paths]
         self.event_ending_time = [
             np.datetime64(datetime.strptime(event_str, "%Y%m%d")) for event_str in event_ending_time_str
         ]
@@ -156,7 +175,7 @@ class train_dataset(TorchDataset):
 
         # 2) Target stats
         self.target_stats = self.OnlineStats.load_or_compute_target_stats(
-            self.MODIS_paths, stats_path=self.target_stats_path
+            self.obs_paths, stats_path=self.target_stats_path
         )
 
     def __len__(self) -> int:
@@ -164,9 +183,9 @@ class train_dataset(TorchDataset):
         return self.cfg["train"]["batch_size"]
 
     def __getitem__(self, idx) -> tuple[torch.Tensor, torch.Tensor]:
-        real_i = idx % len(self.MODIS_paths)
-        sat_img_path = self.MODIS_paths[real_i]
-        sat_img_bbox = self.modis_bboxes[self.flood_ids[real_i]]
+        real_i = idx % len(self.obs_paths)
+        sat_img_path = self.obs_paths[real_i]
+        # sat_img_bbox = self.modis_bboxes[self.flood_ids[real_i]]
         sat_img = rioxarray.open_rasterio(sat_img_path)
         sat_img = sat_img[0]  # first band is the flooded area band
 
@@ -214,7 +233,6 @@ class train_dataset(TorchDataset):
                 end_3hourly_time_index,
             )
             inputs_vars.append(input_patch)
-
 
         # 4) Stack into input tensor
         input_tensor = torch.tensor(
@@ -364,3 +382,18 @@ class train_dataset(TorchDataset):
             except (CRSError, ValueError) as e:
                 log.warning(f"Failed to parse CRS WKT due to {e.__class__.__name__}; defaulting to EPSG:4326")
         return "EPSG:4326"
+
+    def split_paths(self, paths):
+        """
+        Split satellite images to train and test
+
+        :param paths: The paths of satellite images
+        :return: paths for both training and testing
+        """
+        paths = sorted(paths)
+        rnd = random.Random(self.cfg.seed)
+        rnd.shuffle(paths)
+        n_train = int(len(paths) * self.cfg.train.get("train_frac", 1))
+        train_paths = paths[n_train:]
+        test_paths = paths[:n_train]
+        return train_paths, test_paths

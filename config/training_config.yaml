@@ -14,12 +14,18 @@ data_sources:
   dfo_modis_dir: "/Users/farshidrahmani/Dataset/F1_MODIS_USA"
 #  statistics_dir: /Users/farshidrahmani/Library/CloudStorage/OneDrive-ThePennsylvaniaStateUniversity/ASRC/f1_trainer/dataset/statistics
 
+# This path contains the master grids that were created in pre-processing step
 master_grids_dir: "/Users/farshidrahmani/Dataset/master_grids_dir"
 
 params:
   save_path: ./
   resolution: 250    # this will be the resolution of images. All inputs and outputs will be re-gridded to this res
   overwrite_click: False    # False means not to overwrite the processed files on the raw modis files.
+
+model:
+  num_classes: 1
+  in_channels: 336
+
 
 train:
   batch_size: 12
@@ -30,7 +36,17 @@ train:
   epochs: 200
   start_time: 20101001   # YYYYMMDD
   end_time: 20101002     # YYYYMMDD
+  train_frac: 0.7
+  num_workers: 2      # ontrols the number of sub-processes used for data loading
 
 np_seed: 1
 seed: 0
 device: "mps:0"
+
+hydra:
+  sweep:
+    dir: scripts/runs
+  run:
+    # Use absolute path to your project root + scripts/runs
+#    dir: /Users/farshidrahmani/GitHub/f1-trainer/scripts/runs/${name}/${now:%Y-%m-%d_%H-%M-%S}
+    dir: ${project_root}/scripts/runs/${name}/${now:%Y-%m-%d_%H-%M-%S}

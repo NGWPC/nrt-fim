@@ -172,6 +172,7 @@ cython_debug/
 _version.py
 ./data/
 runs/
+**/runs/
 .vscode
 .qodo
 

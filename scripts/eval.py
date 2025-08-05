@@ -36,7 +36,7 @@ def evaluate(cfg, nn):
     :param nn: neural network defined in main
     :return: None
     """
-    dataset = train_dataset(cfg=cfg)
+    dataset = train_dataset(cfg=cfg, mode="test")
 
     dataloader = DataLoader(
         dataset=dataset,
