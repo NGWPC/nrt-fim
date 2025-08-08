@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 from pathlib import Path
 
 from scripts.flood_percent_raster import generate_flood_percent
@@ -44,7 +45,13 @@ def preprocess_modis(cfg, raw_MODIS_paths, grid=None):
         try:
             # standalone_mode=False prevents Click from sys.exit(0) on success
             generate_flood_percent.main(args, standalone_mode=False)
-            MODIS_paths.append(str(output_path))
+            if os.path.exists(output_path):
+                MODIS_paths.append(str(output_path))
+            # if there is no overlap between input_path (satellite image) and master_grid. the dir will be deleted
+            else:
+                out_dir = Path(output_path).parent
+                if os.path.exists(out_dir):
+                    shutil.rmtree(out_dir)
 
         except SystemExit as e:
             if e.code != 0:

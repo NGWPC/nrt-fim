@@ -115,14 +115,16 @@ class train_dataset(TorchDataset):
             raise FileNotFoundError(f"No MODIS TIFF files found in {modis_dir}")
 
         # --- Compute and store bounding boxes keyed by floodID ---
-        self.raw_modis_bboxes = self._compute_modis_bboxes(all_paths, self.input_crs)
+        self.raw_modis_bboxes = self._compute_modis_bboxes(
+            all_paths, self.input_crs, bounds=self.precip.rio.bounds()
+        )
 
         # --- Filter and assign modis_paths internally ---
         self.raw_modis_paths = self._filter_modis_paths(all_paths, self.raw_modis_bboxes)
 
         # pre-processing the satellite data with scripts/flood_percent_raster.py CLI, to get percentage and to regrid
         print("starting satellite images pre-prcoessing!")
-        self.MODIS_paths_all = preprocess_modis(self.cfg, self.raw_modis_paths[:5], grid=self.master_path)
+        self.MODIS_paths_all = preprocess_modis(self.cfg, self.raw_modis_paths, grid=self.master_path)
         print("satellite images pre-prcoessing done!")
 
         self.MODIS_paths_train, self.MODIS_paths_test = self.split_paths(self.MODIS_paths_all)
@@ -134,7 +136,9 @@ class train_dataset(TorchDataset):
             self.obs_paths = self.MODIS_paths_test
         elif self.mode == "train_test":
             self.obs_paths = self.MODIS_paths_all
-        self.modis_bboxes = self._compute_modis_bboxes(self.obs_paths, self.input_crs)
+        self.modis_bboxes = self._compute_modis_bboxes(
+            self.obs_paths, self.input_crs, bounds=self.precip.rio.bounds()
+        )
         self.flood_ids = list(self.modis_bboxes.keys())
         event_ending_time_str = [Path(p).name.split("_to_")[1][:8] for p in self.obs_paths]
         self.event_ending_time = [
@@ -168,8 +172,8 @@ class train_dataset(TorchDataset):
             stats_path=self.input_stats_path,
             time_range=time_range,
             chunk_size_time=48,
-            chunk_size_y=2048,
-            chunk_size_x=2048,
+            chunk_size_y=3840,  ## the maximum size in y axis in conus data
+            chunk_size_x=4608,  ### maximum size of x axis in conus
             n_bins=1000,
         )
 
@@ -187,7 +191,8 @@ class train_dataset(TorchDataset):
         sat_img_path = self.obs_paths[real_i]
         # sat_img_bbox = self.modis_bboxes[self.flood_ids[real_i]]
         sat_img = rioxarray.open_rasterio(sat_img_path)
-        sat_img = sat_img[0]  # first band is the flooded area band
+        sat_water_img = sat_img[0]  # first band is the flooded area band
+        sat_prem_water = sat_img[4]  ## permanent water area
 
         y_size, x_size = self.cfg["train"]["No_pixels_y"], self.cfg["train"]["No_pixels_x"]
         # maximum valid offsets so you don't run off the edge
@@ -197,7 +202,13 @@ class train_dataset(TorchDataset):
         y0 = int(np.random.randint(0, max_y + 1))
         x0 = int(np.random.randint(0, max_x + 1))
 
-        flood_patch = sat_img.isel(y=slice(y0, y0 + y_size), x=slice(x0, x0 + x_size))
+        sat_water_patch = sat_water_img.isel(y=slice(y0, y0 + y_size), x=slice(x0, x0 + x_size))
+        perm_water_patch = sat_prem_water.isel(y=slice(y0, y0 + y_size), x=slice(x0, x0 + x_size))
+        flood_patch = sat_water_patch - perm_water_patch  # just focusing on non-permanent water areas
+        flood_patch = flood_patch.where(flood_patch < 0, 0)
+        flood_patch_norm = self.normalize_min_max(
+            flood_patch, self.target_stats["band_1"], fix_nan_with="zero"
+        )
 
         event_ending_time = self.event_ending_time[real_i]
         end_hourly_time_index = np.argmin(np.abs(self.hourly_time - event_ending_time))
@@ -212,11 +223,15 @@ class train_dataset(TorchDataset):
         for arr in (self.precip, self.air_temp, self.solar_shortwave):
             input_patch = self.extract_patch(
                 arr,
-                flood_patch,
+                flood_patch_norm,
                 start_hourly_time_index,
                 end_hourly_time_index,
             )
-            inputs_vars.append(input_patch)
+            ## normalizing inputs
+            input_patch_norm = self.normalize_min_max(
+                input_patch, self.input_stats[arr.name], fix_nan_with="mean"
+            )
+            inputs_vars.append(input_patch_norm)
 
         # inputs with 3-hourly time step
         for arr in (
@@ -228,11 +243,16 @@ class train_dataset(TorchDataset):
         ):
             input_patch = self.extract_patch(
                 arr,
-                flood_patch,
+                flood_patch_norm,
                 start_3hourly_time_index,
                 end_3hourly_time_index,
             )
-            inputs_vars.append(input_patch)
+
+            ## normalizing inputs
+            input_patch_norm = self.normalize_min_max(
+                input_patch, self.input_stats[arr.name], fix_nan_with="mean"
+            )
+            inputs_vars.append(input_patch_norm)
 
         # 4) Stack into input tensor
         input_tensor = torch.tensor(
@@ -241,7 +261,7 @@ class train_dataset(TorchDataset):
         )
         # 5) Build target tensor
         target_tensor = torch.tensor(
-            flood_patch.values[np.newaxis, ...],  # (1, y_size, x_size)
+            flood_patch_norm.values[np.newaxis, ...],  # (1, y_size, x_size)
             dtype=torch.float32,
         )
 
@@ -327,17 +347,18 @@ class train_dataset(TorchDataset):
             raise RuntimeError("No MODIS flood events remain within CONUS bounds.")
         return sorted(filtered)
 
-    def _compute_modis_bboxes(self, paths, input_crs: str) -> dict:
+    def _compute_modis_bboxes(self, paths, input_crs: str, bounds: tuple) -> dict:
         """Read each MODIS TIFF, transform its bounds to the input CRS, and return a dict mapping floodID to (left, bottom, right, top) for CONUS events. Accept any partial overlap with the USA CONUS area."""
         # CONUS bounding box in WGS84 (lon/lat)
-        conus_wgs84 = (-124.848974, 24.396308, -66.885444, 49.384358)
-        geog_crs = CRS.from_epsg(4326)
+        # conus_wgs84 = (-124.848974, 24.396308, -66.885444, 49.384358)
+        conus_bounds = bounds
+        # geog_crs = CRS.from_epsg(4326)
         target_crs = CRS.from_string(input_crs)
-        # Transform CONUS bounds to target CRS if needed
-        if geog_crs != target_crs:
-            conus_bounds = transform_bounds(geog_crs, target_crs, *conus_wgs84)
-        else:
-            conus_bounds = conus_wgs84
+        # # Transform CONUS bounds to target CRS if needed
+        # if geog_crs != target_crs:
+        #     conus_bounds = transform_bounds(geog_crs, target_crs, *conus_wgs84)
+        # else:
+        #     conus_bounds = conus_wgs84
         bboxes = {}
         for path in paths:
             # extract floodID from directory name
@@ -394,6 +415,58 @@ class train_dataset(TorchDataset):
         rnd = random.Random(self.cfg.seed)
         rnd.shuffle(paths)
         n_train = int(len(paths) * self.cfg.train.get("train_frac", 1))
-        train_paths = paths[n_train:]
-        test_paths = paths[:n_train]
+        train_paths = paths[:n_train]
+        test_paths = paths[n_train:]
         return train_paths, test_paths
+
+    def normalize_min_max(
+        self,
+        val: np.ndarray | xr.DataArray,
+        stats: dict,
+        fix_nan_with: Literal["mean", "zero", "min", "max"] = "mean",
+    ) -> np.ndarray | xr.DataArray:
+        """
+        Min–max normalize an array (or xarray) to [0,1], then replace any NaNs via one of four strategies.
+
+        Parameters
+        ----------
+        val : np.ndarray or xr.DataArray
+            The raw data to normalize.
+        stats : dict
+            Dictionary with keys "min", "max", "mean" giving the original data stats.
+        fix_nan_with : {"mean","zero","min","max"}
+            How to fill any NaNs after normalization.
+            - "mean"  → fill with normalized mean = (mean - min)/(max - min)
+            - "zero"  → fill with 0.0
+            - "min"   → same as zero (the minimum of the normalized range)
+            - "max"   → fill with 1.0
+
+        Returns
+        -------
+        normed : same type as `val`
+            The normalized data, with NaNs replaced.
+        """
+        mn = stats["min"]
+        mx = stats["max"]
+        rng = mx - mn
+        if rng == 0:
+            raise ValueError(f"Cannot normalize when max==min=={mn}")
+        # do the normalization
+        normed = (val - mn) / rng
+
+        # decide fill value in the normalized space
+        if fix_nan_with == "mean":
+            fill = (stats["mean"] - mn) / rng
+        elif fix_nan_with in ("zero", "min"):
+            fill = 0.0
+        elif fix_nan_with == "max":
+            fill = 1.0
+        else:
+            raise ValueError(f"Unknown fix_nan_with={fix_nan_with}")
+
+        # fill NaNs
+        if isinstance(normed, xr.DataArray):
+            return normed.fillna(fill)
+        else:
+            # assume numpy array
+            return np.where(np.isnan(normed), fill, normed)

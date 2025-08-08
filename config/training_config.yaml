@@ -35,7 +35,7 @@ train:
   lr: 0.001
   epochs: 200
   start_time: 20101001   # YYYYMMDD
-  end_time: 20101002     # YYYYMMDD
+  end_time: 20101005     # YYYYMMDD
   train_frac: 0.7
   num_workers: 2      # ontrols the number of sub-processes used for data loading
 

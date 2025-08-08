@@ -46,11 +46,12 @@ def calculate_flood_percentage(raster: xr.DataArray, target_resolution: int | fl
 
     # For each band
     # for b in range(raster.rio.count):
-    for b in range(1):  # just for the first band
+    band_list = [0, 4]
+    for b in band_list:  # just for the first band and fifth band.
         # Get the band data
         band_data = data[b]
 
-        # Identify pixels with value 1 (flooded)
+        # Identify pixels with value 1 (flooded or permanent water)
         binary_mask = (band_data == 1).astype(np.float32)
 
         # Calculate percentage for each block
@@ -126,12 +127,12 @@ def generate_flood_percent(
     resolution: int | float = None,
     overwrite: bool = False,
 ):
-    """A script to convert a binary flood extent raster to raster with percent flooded per pixel, genernally at a new resolution. When using `--grid` argument, the raster will be re-aligned to a new grid.
+    """A script to convert a binary flood extent raster to raster with percent flooded per pixel, generally at a new resolution. When using `--grid` argument, the raster will be re-aligned to a new grid.
 
     Args:
         input_path (str): Absolute path to input file
         output_path (str): Absolute path to output file. Temporary files will be written to this directory and deleted at end of script.
-        grid (str, optional): Absolute path to grid to align out put to. Defaults to None.
+        grid (str, optional): Absolute path to grid to align output to. Defaults to None.
         crs (int, optional): EPSG projection written as int value (e.g. 4326). If none specified and grid, grid CRS will be used.
                 If none specificed and no grid, input CRS will be used. Defaults to None.
         resolution (int, optional): Pixel resolution in units of output CRS. If none specified and grid, grid resolution will be used.
@@ -144,6 +145,11 @@ def generate_flood_percent(
     temp_ras_aligned = dir / "temp_raster_aligned.tif"
 
     ras = rioxarray.open_rasterio(input_path)
+    # ## some MODIS file don't have crs. so I just reprojecthem to epsg:4326 (like othe MODIS crs)
+    ras = ras.rio.reproject("EPSG:4326")
+    input_file_name = "_" + str(Path(input_path).name)
+    input_path_4326 = dir / input_file_name
+    ras.rio.to_raster(input_path_4326)
 
     if not overwrite and os.path.exists(output_path):
         raise FileExistsError(
@@ -190,7 +196,7 @@ def generate_flood_percent(
                 rio_shutil.copy(vrt, temp_ras_aligned, driver="GTiff", tiled="YES", compress="LZW")
 
         # clip flood back to original extent keeping new grid alignment
-        cmd = f"rio clip {temp_ras_aligned} {output_path} --like {input_path}".split()
+        cmd = f"rio clip {temp_ras_aligned} {output_path} --like {input_path_4326}".split()
         cmd += ["--overwrite"] if overwrite else []
 
         subprocess.call(cmd)
@@ -198,7 +204,7 @@ def generate_flood_percent(
     else:
         flood_percent.rio.to_raster(output_path)
 
-    for f in [temp_ras, temp_ras_aligned]:
+    for f in [temp_ras, temp_ras_aligned, input_path_4326]:
         if os.path.exists(f):
             os.remove(f)
             print(f"Removed temporary {f}")

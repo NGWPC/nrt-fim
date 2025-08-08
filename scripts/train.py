@@ -52,9 +52,8 @@ def training_loop(cfg, nn):
 
     optimizer = torch.optim.Adam(params=nn.parameters(), lr=lr)
 
+    nn.train()
     for epoch in range(0, cfg.train.epochs + 1):
-        nn.train()
-
         for i, mini_batch in enumerate(dataloader, start=0):
             inputs, target = mini_batch
             inputs, target = inputs.to(cfg.device), target.to(cfg.device)
@@ -82,29 +81,6 @@ def training_loop(cfg, nn):
                 name=cfg.name,
                 saved_model_path=cfg.params.save_path / "saved_models",
             )
-
-    optimizer = torch.optim.Adam(params=nn.parameters(), lr=lr)
-
-    for epoch in range(0, cfg.train.epochs + 1):
-        nn.train()
-
-        for i, mini_batch in enumerate(dataloader, start=0):
-            inputs, target = mini_batch
-            inputs, target = inputs.to(cfg.device), target.to(cfg.device)
-            optimizer.zero_grad()
-            pred = nn(inputs)
-
-            loss = mse_loss(
-                input=pred,
-                target=target,
-            )
-
-            log.info("Running backpropagation")
-
-            loss.backward()
-            optimizer.step()
-
-            log.info(f"Epoch {epoch}, Batch {i}, Loss: {loss.item():.6f}")
 
 
 @hydra.main(

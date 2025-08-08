@@ -72,6 +72,14 @@ class OnlineStats:
         # (keep obs fields if you still need them separately)
 
     def update(self, data: np.ndarray):
+        """
+        Updates the total stats by calculating the stats of every chunk that it reads
+
+        Parameters
+        ----------
+        :param data: chunk of data that has been read
+        :return: --
+        """
         flat = data.ravel()
         flat = flat[np.isfinite(flat)]
         if flat.size == 0:
@@ -97,6 +105,11 @@ class OnlineStats:
             self.n = n
 
     def finalize(self):
+        """
+        Finalize the stats
+
+        :return: final calculated stats
+        """
         variance = (self.M2 / self.n) if self.n > 0 else np.nan
         return {
             "count": int(self.n),
@@ -115,6 +128,17 @@ class OnlineStats:
         time_range: tuple[np.datetime64, np.datetime64] | None = None,
         n_bins: int = 1000,
     ) -> dict:
+        """
+        Computes stats for input variables
+
+        :param ds_inputs: raw inputs
+        :param chunk_size_time: chunk siz in time simension
+        :param chunk_size_y: chunk size in y dimension
+        :param chunk_size_x: chunk size in x dimension
+        :param time_range: total time range to calculate stats
+        :param n_bins: number of bins to calculate p10 and p90
+        :return: stats
+        """
         out: dict[str, dict] = {}
         for da in ds_inputs:
             name = da.name
@@ -162,9 +186,9 @@ class OnlineStats:
 
                 cdf = np.cumsum(hist)
 
-                def pct(p):
-                    idx = np.searchsorted(cdf, p * total)
-                    return float(bins[min(idx, n_bins - 1)])
+                def pct(p, _total=total, _cdf=cdf, _bins=bins, _n_bins=n_bins):
+                    idx = np.searchsorted(_cdf, p * _total)
+                    return float(_bins[min(idx, _n_bins - 1)])
 
                 base["p10"] = pct(0.10)
                 base["p90"] = pct(0.90)
@@ -186,6 +210,18 @@ class OnlineStats:
         chunk_size_x: int = 512,
         n_bins: int = 1000,
     ) -> dict:
+        """
+        Takes care of statistics. Calculates statistics if the json file not available.
+
+        :param ds_inputs: raw inputs
+        :param stats_path: the path that stats are saved
+        :param time_range: the total time range that stats would be calculate
+        :param chunk_size_time:  chunk size on time dimension
+        :param chunk_size_y: chunk size on y axis
+        :param chunk_size_x: chunk size on x axis
+        :param n_bins: number of bins to calculate p10 and p90
+        :return: stats
+        """
         os.makedirs(os.path.dirname(stats_path), exist_ok=True)
         names = [ds.name for ds in ds_inputs]
 
@@ -214,6 +250,7 @@ class OnlineStats:
     def compute_target_stats(self, modis_paths: list[str]) -> dict:
         """
         Stream through a list of GeoTIFF files, one file at a time,
+
         and compute min, max, mean, std separately for each band.
         """
         # Open the first file just to get the band count
@@ -229,7 +266,8 @@ class OnlineStats:
                 # src.read() returns array of shape (bands, height, width)
                 arr = src.read().astype("float32")
             for i in range(band_count):
-                stats_per_band[i].update(arr[i])
+                arr_new = arr[i][arr[i] != 1e20]
+                stats_per_band[i].update(arr_new)
 
         # Finalize each band's stats into a dict
         out = {}
@@ -240,6 +278,7 @@ class OnlineStats:
     def load_or_compute_target_stats(self, modis_paths: list[str], stats_path: str) -> dict:
         """
         Load existing per-band target-stats JSON if valid (contains band_1…band_N),
+
         otherwise compute via compute_target_stats() and save to stats_path.
         """
         os.makedirs(os.path.dirname(stats_path), exist_ok=True)
