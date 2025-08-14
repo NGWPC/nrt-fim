@@ -1,4 +1,5 @@
 import glob
+import json
 import logging
 import os
 import random
@@ -417,7 +418,23 @@ class train_dataset(TorchDataset):
         n_train = int(len(paths) * self.cfg.train.get("train_frac", 1))
         train_paths = paths[:n_train]
         test_paths = paths[n_train:]
+        # save the test split list into json
+        self.save_splits_json(test_paths)
         return train_paths, test_paths
+
+    def save_splits_json(self, split: list) -> None:
+        """
+        Save the test split list into json file
+
+        :param split: the test split list that is gonna be saved in
+        :return: None
+        """
+        out_path = self.cfg.params.save_path / "test_splits.json"
+        # Write JSON
+        with out_path.open("w", encoding="utf-8") as f:
+            json.dump(split, f, indent=2)
+        return train_paths, test_paths
+
 
     def normalize_min_max(
         self,

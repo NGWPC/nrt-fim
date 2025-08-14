@@ -28,10 +28,10 @@ model:
 
 
 train:
-  batch_size: 12
+  batch_size: 50
   rho: 72   # hours
-  No_pixels_x: 50
-  No_pixels_y: 64
+  No_pixels_x: 128
+  No_pixels_y: 128
   lr: 0.001
   epochs: 200
   start_time: 20101001   # YYYYMMDD
