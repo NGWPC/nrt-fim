@@ -31,10 +31,11 @@ def compute_input_stats(cfg: DictConfig) -> dict:
         inputs_dict=inputs_dict,
         stats_path=stats_path,
         time_range=time_range,
-        chunk_size_time=int(cfg.stats.chunk_size_time) if "stats" in cfg and "chunk_size_time" in cfg.stats else 48,
-        chunk_size_y=int(cfg.stats.chunk_size_y) if "stats" in cfg and "chunk_size_y" in cfg.stats else 3840,
-        chunk_size_x=int(cfg.stats.chunk_size_x) if "stats" in cfg and "chunk_size_x" in cfg.stats else 4608,
-        n_bins=int(cfg.stats.n_bins) if "stats" in cfg and "n_bins" in cfg.stats else 1000,
+        chunk_size_time=int(cfg.statistics.chunk_size_time),
+        chunk_size_y=int(cfg.statistics.chunk_size_y),
+        chunk_size_x=int(cfg.statistics.chunk_size_x),
+        n_bins=int(cfg.statistics.n_bins),
+        calculate_p10_p90=cfg.statistics.calculate_p10_p90
     )
     return stats
 

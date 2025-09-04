@@ -184,6 +184,7 @@ class InputStatsComputer:
         chunk_y: int,
         chunk_x: int,
         n_bins: int,
+        calculate_p10_p90: bool = False,
     ) -> Dict[str, float]:
         # First pass: mean/var/min/max
         agg = OnlineStats()
@@ -199,36 +200,37 @@ class InputStatsComputer:
         base = agg.finalize()
         total = agg.n
 
-        # Second pass: histogram for p10/p90
-        if total > 0 and np.isfinite(base["min"]) and np.isfinite(base["max"]):
-            minv, maxv = base["min"], base["max"]
-            if minv == maxv:
-                # degenerate
-                base["p10"] = minv
-                base["p90"] = maxv
-                return base
+        if calculate_p10_p90:
+            # Second pass: histogram for p10/p90
+            if total > 0 and np.isfinite(base["min"]) and np.isfinite(base["max"]):
+                minv, maxv = base["min"], base["max"]
+                if minv == maxv:
+                    # degenerate
+                    base["p10"] = minv
+                    base["p90"] = maxv
+                    return base
 
-            bins = np.linspace(minv, maxv, n_bins + 1)
-            hist = np.zeros(n_bins, dtype=np.int64)
+                bins = np.linspace(minv, maxv, n_bins + 1)
+                hist = np.zeros(n_bins, dtype=np.int64)
 
-            for block in _iter_blocks_dynamic_3d(da, time_range, chunk_t, chunk_y, chunk_x):
-                flat = block.ravel().astype("float64")
-                # sanitize
-                if self.ignore_values:
-                    for v in self.ignore_values:
-                        flat[flat == v] = np.nan
-                if self.also_flag_large_as_nodata:
-                    flat[np.abs(flat) > self.large_threshold] = np.nan
-                flat = flat[np.isfinite(flat)]
-                if flat.size:
-                    h, _ = np.histogram(flat, bins=bins)
-                    hist += h
+                for block in _iter_blocks_dynamic_3d(da, time_range, chunk_t, chunk_y, chunk_x):
+                    flat = block.ravel().astype("float64")
+                    # sanitize
+                    if self.ignore_values:
+                        for v in self.ignore_values:
+                            flat[flat == v] = np.nan
+                    if self.also_flag_large_as_nodata:
+                        flat[np.abs(flat) > self.large_threshold] = np.nan
+                    flat = flat[np.isfinite(flat)]
+                    if flat.size:
+                        h, _ = np.histogram(flat, bins=bins)
+                        hist += h
 
-            base["p10"] = self._percentiles_from_hist(hist, bins, total, 0.10)
-            base["p90"] = self._percentiles_from_hist(hist, bins, total, 0.90)
-        else:
-            base["p10"] = np.nan
-            base["p90"] = np.nan
+                base["p10"] = self._percentiles_from_hist(hist, bins, total, 0.10)
+                base["p90"] = self._percentiles_from_hist(hist, bins, total, 0.90)
+            else:
+                base["p10"] = np.nan
+                base["p90"] = np.nan
         return base
 
     def _two_pass_stats_static(
@@ -237,6 +239,7 @@ class InputStatsComputer:
         chunk_y: int,
         chunk_x: int,
         n_bins: int,
+        calculate_p10_p90: bool = False,
     ) -> Dict[str, float]:
         # First pass
         agg = OnlineStats()
@@ -250,34 +253,35 @@ class InputStatsComputer:
         base = agg.finalize()
         total = agg.n
 
-        # Second pass
-        if total > 0 and np.isfinite(base["min"]) and np.isfinite(base["max"]):
-            minv, maxv = base["min"], base["max"]
-            if minv == maxv:
-                base["p10"] = minv
-                base["p90"] = maxv
-                return base
+        if calculate_p10_p90 == True:
+            # Second pass
+            if total > 0 and np.isfinite(base["min"]) and np.isfinite(base["max"]):
+                minv, maxv = base["min"], base["max"]
+                if minv == maxv:
+                    base["p10"] = minv
+                    base["p90"] = maxv
+                    return base
 
-            bins = np.linspace(minv, maxv, n_bins + 1)
-            hist = np.zeros(n_bins, dtype=np.int64)
+                bins = np.linspace(minv, maxv, n_bins + 1)
+                hist = np.zeros(n_bins, dtype=np.int64)
 
-            for block in _iter_blocks_static_2d(path, chunk_y, chunk_x, band=1):
-                flat = block.ravel().astype("float64")
-                if self.ignore_values:
-                    for v in self.ignore_values:
-                        flat[flat == v] = np.nan
-                if self.also_flag_large_as_nodata:
-                    flat[np.abs(flat) > self.large_threshold] = np.nan
-                flat = flat[np.isfinite(flat)]
-                if flat.size:
-                    h, _ = np.histogram(flat, bins=bins)
-                    hist += h
+                for block in _iter_blocks_static_2d(path, chunk_y, chunk_x, band=1):
+                    flat = block.ravel().astype("float64")
+                    if self.ignore_values:
+                        for v in self.ignore_values:
+                            flat[flat == v] = np.nan
+                    if self.also_flag_large_as_nodata:
+                        flat[np.abs(flat) > self.large_threshold] = np.nan
+                    flat = flat[np.isfinite(flat)]
+                    if flat.size:
+                        h, _ = np.histogram(flat, bins=bins)
+                        hist += h
 
-            base["p10"] = self._percentiles_from_hist(hist, bins, total, 0.10)
-            base["p90"] = self._percentiles_from_hist(hist, bins, total, 0.90)
-        else:
-            base["p10"] = np.nan
-            base["p90"] = np.nan
+                base["p10"] = self._percentiles_from_hist(hist, bins, total, 0.10)
+                base["p90"] = self._percentiles_from_hist(hist, bins, total, 0.90)
+            else:
+                base["p10"] = np.nan
+                base["p90"] = np.nan
         return base
 
     def compute_from_inputs_dict(
@@ -288,6 +292,7 @@ class InputStatsComputer:
         chunk_size_y: int = 512,
         chunk_size_x: int = 512,
         n_bins: int = 1000,
+        calculate_p10_p90: bool = False,
     ) -> Dict[str, Dict[str, float]]:
         """
         Compute stats for everything in inputs_dict the user selected:
@@ -310,6 +315,7 @@ class InputStatsComputer:
                 chunk_y=chunk_size_y,
                 chunk_x=chunk_size_x,
                 n_bins=n_bins,
+                calculate_p10_p90=calculate_p10_p90
             )
 
         # statics
@@ -319,6 +325,7 @@ class InputStatsComputer:
                 chunk_y=chunk_size_y,
                 chunk_x=chunk_size_x,
                 n_bins=n_bins,
+                calculate_p10_p90=calculate_p10_p90
             )
 
         return out
@@ -332,6 +339,7 @@ class InputStatsComputer:
         chunk_size_y: int = 512,
         chunk_size_x: int = 512,
         n_bins: int = 1000,
+        calculate_p10_p90: bool = False,
     ) -> Dict[str, Dict[str, float]]:
         stats_path = Path(stats_path)
         stats_path.parent.mkdir(parents=True, exist_ok=True)
@@ -357,6 +365,7 @@ class InputStatsComputer:
             chunk_size_y=chunk_size_y,
             chunk_size_x=chunk_size_x,
             n_bins=n_bins,
+            calculate_p10_p90=calculate_p10_p90
         )
         with open(stats_path, "w") as f:
             json.dump(stats, f, indent=2)
