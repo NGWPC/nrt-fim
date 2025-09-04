@@ -1,4 +1,6 @@
+from __future__ import annotations
 import logging
+import random
 from datetime import datetime
 from pathlib import Path
 
@@ -6,16 +8,37 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pyproj
-import torch
 import rasterio
+import torch
 import xarray as xr
 from geocube.api.core import make_geocube
 from matplotlib.colors import LinearSegmentedColormap
-from rasterio.crs import CRS
 from rasterio.merge import merge
 from rasterio.transform import from_origin
+from rioxarray.exceptions import MissingCRS
+from typing import Optional, Union, Sequence
+from rasterio.crs import CRS
+from rasterio.transform import Affine
+from trainer.utils.geo_utils import infer_crs
 
 log = logging.getLogger(__name__)
+
+
+def _set_seed_everywhere(seed: int) -> None:
+    """
+    Set random seed for reproducibility
+
+    :param seed: seed value from config file
+    :return: None
+    """
+    random.seed(seed)  # python
+    np.random.seed(seed)  # numpy
+    torch.manual_seed(seed)  # pytorch
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def read(start_time: datetime, end_time: datetime):
@@ -83,7 +106,7 @@ def save_prediction_image(pred_tensor, epoch, save_dir, statistics, batch=None):
     vmin = np.min(pred_np)
     vmax = np.max(pred_np)
 
-    # Create a figure with two subplots
+    # Create a figure with one subplots
     fig, ax1 = plt.subplots(1, 1, figsize=(10, 6))
 
     colors = [(1, 1, 1), (0.8, 0.9, 1), (0.6, 0.8, 1), (0.4, 0.65, 1), (0.2, 0.5, 1), (0, 0.3, 0.8)]
@@ -111,6 +134,63 @@ def save_prediction_image(pred_tensor, epoch, save_dir, statistics, batch=None):
     plt.savefig(save_dir / filename, dpi=300, bbox_inches="tight")
     plt.close()
 
+
+def save_array_as_gtiff(
+    arr_hw: np.ndarray,                         # (H, W)
+    out_path: Union[str, Path],                 # where to write
+    transform: Union[Affine, Sequence[float]],  # Affine or GDAL 6-tuple
+    crs: Union[str, CRS],                       # e.g. "EPSG:4326" or rasterio.crs.CRS
+    nodata: Optional[float] = None,
+    dtype: Optional[np.dtype] = None,
+) -> None:
+    """
+    Save a single-band array as a GeoTIFF using the provided transform and CRS.
+    """
+    out_path = Path(out_path)
+    arr = np.asarray(arr_hw)
+    if arr.ndim != 2:
+        raise ValueError(f"arr_hw must be 2D (H, W), got shape {arr.shape}")
+
+    # Coerce CRS
+    crs_out = crs if isinstance(crs, CRS) else CRS.from_string(str(crs))
+
+    # Coerce transform
+    if isinstance(transform, Affine):
+        tfm = transform
+    elif isinstance(transform, (tuple, list)) and len(transform) == 6:
+        tfm = Affine.from_gdal(*transform)  # (a,b,c,d,e,f)
+    else:
+        raise ValueError("transform must be an Affine or a 6-tuple/list in GDAL order")
+
+    # Fill NaNs with nodata if requested
+    if nodata is not None and np.issubdtype(arr.dtype, np.floating):
+        arr = np.where(np.isnan(arr), nodata, arr)
+
+    # Choose output dtype
+    if dtype is None:
+        dtype = np.float32 if np.issubdtype(arr.dtype, np.floating) else arr.dtype
+    arr_out = arr.astype(dtype, copy=False)
+
+    profile = {
+        "driver": "GTiff",
+        "height": int(arr_out.shape[0]),
+        "width": int(arr_out.shape[1]),
+        "count": 1,
+        "dtype": str(arr_out.dtype),
+        "transform": tfm,
+        "crs": crs_out,
+        "tiled": True,
+        "blockxsize": 256,
+        "blockysize": 256,
+        "compress": "deflate",
+        "predictor": 3 if np.issubdtype(np.dtype(dtype), np.floating) else 2,
+        "bigtiff": "IF_SAFER",
+        "nodata": nodata,
+    }
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(out_path, "w", **profile) as dst:
+        dst.write(arr_out, 1)
 
 def rasterize(
     input_vector: str | Path | gpd.GeoDataFrame,
@@ -149,7 +229,6 @@ def rasterize(
 def save_state(
     epoch: int,
     generator: torch.Generator,
-    mini_batch: int,
     mlp: torch.nn.Module,
     optimizer: torch.nn.Module,
     name: str,
@@ -161,8 +240,6 @@ def save_state(
     ----------
     epoch : int
         The epoch number
-    mini_batch : int
-        The mini batch number
     mlp : nn.Module
         The MLP model
     optimizer : nn.Module
@@ -202,16 +279,12 @@ def save_state(
     }
     if torch.cuda.is_available():
         state["cuda_rng_state"] = torch.cuda.get_rng_state()
-    if mini_batch == -1:
-        state["epoch"] = epoch + 1
-        state["mini_batch"] = 0
-    else:
-        state["epoch"] = epoch
-        state["mini_batch"] = mini_batch
+
+    state["epoch"] = epoch + 1
 
     torch.save(
         state,
-        saved_model_path / f"_{name}_epoch_{state['epoch']}_mb_{state['mini_batch']}.pt",
+        saved_model_path / f"_{name}_epoch_{state['epoch']}.pt",
     )
 
 
@@ -221,82 +294,83 @@ def save_state(
 #     read(start_time, end_time)
 
 
-def create_master_from_da(
-    da,
-    master_path: str,
-    resolution: float = 250.0,
-    nodata: float = np.nan,
-    dtype: str = "float32",
-    compress: str = "lzw",
-):
-    """
-    Create a blank GeoTIFF grid at `resolution` covering the full extent of `da`.
-    - da must have .x and .y coordinates in projected units (e.g. meters).
-    - da must carry its CRS either in da.rio.crs, da.attrs['esri_pe_string'], or da.attrs['proj4'].
-    """
-    # 1) grab spatial bounds
-    left = float(da.x.min())
-    right = float(da.x.max())
-    bottom = float(da.y.min())
-    top = float(da.y.max())
-
-    # 2) compute output size
-    width = int(np.ceil((right - left) / resolution))
-    height = int(np.ceil((top - bottom) / resolution))
-
-    # 3) build Affine transform (upper-left corner)
-    transform = from_origin(left, top, resolution, resolution)
-
-    # 4) detect CRS
-    crs = None
-
-    # 4a) try rioxarray accessor
-    try:
-        crs = da.rio.crs
-    except Exception:
-        crs = None
-
-    # 4b) fallback to ESRI WKT (esri_pe_string or spatial_ref)
-    if crs is None:
-        wkt = da.attrs.get("esri_pe_string") or da.attrs.get("spatial_ref")
-        if wkt:
-            try:
-                crs = CRS.from_wkt(wkt)
-            except Exception as e:
-                log.warning(f"Failed to parse WKT CRS: {e}; will try PROJ4 next")
-
-    # 4c) fallback to PROJ4 string
-    if crs is None:
-        proj4 = da.attrs.get("proj4")
-        if proj4:
-            try:
-                crs = CRS.from_string(proj4)
-            except Exception as e:
-                log.warning(f"Failed to parse PROJ4 CRS: {e}; will default to EPSG:4326")
-
-    # 4d) final default
-    if crs is None:
-        log.warning("No CRS found on DataArray; defaulting to EPSG:4326")
-        crs = CRS.from_epsg(4326)
-
-    # 5) write blank raster
-    profile = {
-        "driver": "GTiff",
-        "dtype": dtype,
-        "count": 1,
-        "crs": crs,
-        "transform": transform,
-        "width": width,
-        "height": height,
-        "nodata": nodata,
-        "compress": compress,
-    }
-
-    with rasterio.open(master_path, "w", **profile) as dst:
-        blank = np.full((height, width), nodata, dtype=np.dtype(dtype))
-        dst.write(blank, 1)
-
-    print(f"→ Master grid written to {master_path}")
+# def create_master_from_da(
+#     da,
+#     master_path: str,
+#     resolution: float = 250.0,
+#     nodata: float = np.nan,
+#     dtype: str = "float32",
+#     compress: str = "lzw",
+# ):
+#     """
+#     Create a blank GeoTIFF grid at `resolution` covering the full extent of `da`.
+#
+#     - da must have .x and .y coordinates in projected units (e.g. meters).
+#     - da must carry its CRS either in da.rio.crs, da.attrs['esri_pe_string'], or da.attrs['proj4'].
+#     """
+#     # 1) grab spatial bounds
+#     left = float(da.x.min())
+#     right = float(da.x.max())
+#     bottom = float(da.y.min())
+#     top = float(da.y.max())
+#
+#     # 2) compute output size
+#     width = int(np.ceil((right - left) / resolution))
+#     height = int(np.ceil((top - bottom) / resolution))
+#
+#     # 3) build Affine transform (upper-left corner)
+#     transform = from_origin(left, top, resolution, resolution)
+#
+#     # 4) detect CRS
+#     crs = None
+#
+#     # 4a) try rioxarray accessor
+#     try:
+#         crs = infer_crs(da)
+#     except (MissingCRS, AttributeError):
+#         crs = None
+#
+#     # 4b) fallback to ESRI WKT (esri_pe_string or spatial_ref)
+#     if crs is None:
+#         wkt = da.attrs.get("esri_pe_string") or da.attrs.get("spatial_ref")
+#         if wkt:
+#             try:
+#                 crs = CRS.from_wkt(wkt)
+#             except (ValueError, TypeError) as e:
+#                 log.warning(f"Failed to parse WKT CRS: {e}; will try PROJ4 next")
+#
+#     # 4c) fallback to PROJ4 string
+#     if crs is None:
+#         proj4 = da.attrs.get("proj4")
+#         if proj4:
+#             try:
+#                 crs = CRS.from_string(proj4)
+#             except (ValueError, TypeError) as e:
+#                 log.warning(f"Failed to parse PROJ4 CRS: {e}; will default to EPSG:4326")
+#
+#     # 4d) final default
+#     if crs is None:
+#         log.warning("No CRS found on DataArray; defaulting to EPSG:4326")
+#         crs = CRS.from_epsg(4326)
+#
+#     # 5) write blank raster
+#     profile = {
+#         "driver": "GTiff",
+#         "dtype": dtype,
+#         "count": 1,
+#         "crs": crs,
+#         "transform": transform,
+#         "width": width,
+#         "height": height,
+#         "nodata": nodata,
+#         "compress": compress,
+#     }
+#
+#     with rasterio.open(master_path, "w", **profile) as dst:
+#         blank = np.full((height, width), nodata, dtype=np.dtype(dtype))
+#         dst.write(blank, 1)
+#
+#     print(f"→ Master grid written to {master_path}")
 
 
 def merge_rasters(input_paths: list[str], output_path: str) -> None:
@@ -352,6 +426,18 @@ def merge_rasters(input_paths: list[str], output_path: str) -> None:
         for src in src_files:
             src.close()
 
+
+def resolve_cfg_path(cfg: DictConfig, dotted: str) -> Optional[str]:
+    """
+    Resolve a dotted-string path (e.g., "data_sources.base_pattern_precip") in cfg.
+    Returns None if not found.
+    """
+    cur = cfg
+    for part in dotted.split("."):
+        if part not in cur:
+            return None
+        cur = cur[part]
+    return str(cur)
 
 if __name__ == "__main__":
     merge_rasters(

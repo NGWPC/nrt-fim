@@ -6,9 +6,11 @@ import numpy as np
 import pyproj
 import rasterio
 import shapely
+import torch
 from numpy.testing import assert_array_equal
+from omegaconf import DictConfig, OmegaConf
 
-from trainer.datasets.utils import rasterize
+from trainer.utils.utils import rasterize
 
 
 def test_rasterize() -> None:
@@ -53,3 +55,70 @@ def test_rasterize() -> None:
 
     finally:
         os.remove(output_raster)
+
+
+def load_trained_config(run_dir: Path) -> DictConfig:
+    """
+    loads a trained config to evaluate
+
+    :param run_dir: the absolute path to the trained instance run
+    :return: the trained config file
+    """
+    cfg_path = run_dir / ".hydra" / "config.yaml"
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"Could not find {cfg_path}")
+    return OmegaConf.load(cfg_path)
+
+
+def find_checkpoint(run_dir: Path, eval_cfg: DictConfig, train_cfg: DictConfig) -> Path:
+    """
+    finds the checkpoint for an evaluation test
+
+    :param run_dir: the absolute path to the trained instance run
+    :param eval_cfg: the evaluation config file
+    :param train_cfg: the training config file
+    :return: the checkpoint for evaluation
+    """
+
+    saved = run_dir / "saved_models"
+    if not saved.exists():
+        raise FileNotFoundError(f"No saved_models/ in {run_dir}")
+    # prefer best_*, else last_*, else any *.pt (most recent by mtime)
+    candidates = sorted(saved.glob("*.pt"))
+    if not candidates:
+        raise FileNotFoundError(f"No checkpoints in {saved}")
+
+    Number = int(eval_cfg.epoch_to_test)
+    name = train_cfg.name
+    if Number == (-1):
+        file_name = candidates[-1]
+    elif Number <= int(train_cfg.train.epochs):
+        file_name = f"_{name}_epoch_{Number}.pt"
+        if not Path(saved / file_name).exists():
+            raise FileNotFoundError(f"No checkpoints in {saved}")
+    else:
+        file_name = candidates[-1]
+    checkpoint = Path(saved / file_name)
+    return checkpoint
+
+
+def load_weights(model: torch.nn.Module, ckpt_path: Path, device: str) -> None:
+    """
+    load the Nn and weights from a checkpoint
+
+    :param model: NN model
+    :param ckpt_path: checkpoint path
+    :param device: device
+    :return: NN model
+    """
+    blob = torch.load(ckpt_path, map_location=device)
+    # handle various checkpoint formats
+    if isinstance(blob, dict) and "model_state" in blob:
+        state = blob["model_state"]  # BMIBase-style
+    elif isinstance(blob, dict) and "state_dict" in blob:
+        state = blob["state_dict"]  # common pattern
+    elif isinstance(blob, dict) and "model_state_dict" in blob:
+        state = blob["model_state_dict"]
+    else:
+        state = blob  # raw state_dict
+    return model.load_state_dict(state, strict=False)

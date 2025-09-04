@@ -23,16 +23,16 @@ dynamic = ["version"]
 requires-python = ">= 3.12"
 license = { file = "LICENSE" }
 authors = [
-  { name = "Farshid Rahmani", email = "Farshid.Rahmani@rtx.com" },
   { name = "Tadd Bindas", email = "tadd.bindas@ertcorp.com" },
+  { name = "Farshid Rahmani", email = "Farshid.Rahmani@rtx.com" },
   { name = "Quercus Hamlin", email = "qhamlin@asrcfederal.com" },
   { name = "Sylvia Chin", email = "sylvia.c.chin@rtx.com" },
   { name = "Daniel Cumpton", email = "dcumpton@rtx.com" },
   { name = "Brock Hinkson", email = "brock.w.hinkson@rtx.com" },
 ]
 maintainers = [
-  { name = "Farshid Rahmani", email = "Farshid.Rahmani@rtx.com" },
   { name = "Tadd Bindas", email = "tadd.bindas@ertcorp.com" },
+  { name = "Farshid Rahmani", email = "Farshid.Rahmani@rtx.com" },
   { name = "Quercus Hamlin", email = "qhamlin@asrcfederal.com" },
   { name = "Sylvia Chin", email = "sylvia.c.chin@rtx.com" },
   { name = "Daniel Cumpton", email = "dcumpton@rtx.com" },
@@ -66,7 +66,9 @@ dependencies = [
   "boto3==1.37.1",
   "click==8.2.1",
   "torch==2.6.0",
-  "torchvision==0.21.0"
+  "torchvision==0.21.0",
+  "torchgeo>=0.7.1",
+  "awscli>=1.38.3",
 ]
 
 [project.optional-dependencies]

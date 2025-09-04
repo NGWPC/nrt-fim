@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 
 from trainer.bmi import FModelBMI
 from trainer.datasets.train_dataset import train_dataset
-from trainer.datasets.utils import save_prediction_image
+from trainer.utils.utils import save_prediction_image
 
 log = logging.getLogger(__name__)
 

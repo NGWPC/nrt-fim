@@ -10,6 +10,8 @@ import xarray as xr
 from rasterio import shutil as rio_shutil
 from rasterio.enums import Resampling
 from rasterio.vrt import WarpedVRT
+from rasterio.warp import transform_bounds
+from rasterio.windows import from_bounds, bounds as window_bounds
 
 rasterio.env.logging.getLogger("rasterio._env").setLevel("ERROR")
 
@@ -45,9 +47,7 @@ def calculate_flood_percentage(raster: xr.DataArray, target_resolution: int | fl
     data = raster.values
 
     # For each band
-    # for b in range(raster.rio.count):
-    band_list = [0, 4]
-    for b in band_list:  # just for the first band and fifth band.
+    for b in range(1):   #(raster.rio.count):    only for band 0
         # Get the band data
         band_data = data[b]
 
@@ -134,9 +134,9 @@ def generate_flood_percent(
         output_path (str): Absolute path to output file. Temporary files will be written to this directory and deleted at end of script.
         grid (str, optional): Absolute path to grid to align output to. Defaults to None.
         crs (int, optional): EPSG projection written as int value (e.g. 4326). If none specified and grid, grid CRS will be used.
-                If none specificed and no grid, input CRS will be used. Defaults to None.
+                If none specified and no grid, input CRS will be used. Defaults to None.
         resolution (int, optional): Pixel resolution in units of output CRS. If none specified and grid, grid resolution will be used.
-                If none specificed and no grid, input x-dimension resolution will be used. Defaults to None.
+                If none specified and no grid, input x-dimension resolution will be used. Defaults to None.
         overwrite (bool, optional): Flag to overwrite existing file output. Defaults to False.
     """
     # save temporary paths
@@ -145,11 +145,11 @@ def generate_flood_percent(
     temp_ras_aligned = dir / "temp_raster_aligned.tif"
 
     ras = rioxarray.open_rasterio(input_path)
-    # ## some MODIS file don't have crs. so I just reprojecthem to epsg:4326 (like othe MODIS crs)
-    ras = ras.rio.reproject("EPSG:4326")
-    input_file_name = "_" + str(Path(input_path).name)
-    input_path_4326 = dir / input_file_name
-    ras.rio.to_raster(input_path_4326)
+    # # ## some MODIS file don't have crs. so I just reproject them to epsg:4326 (like other MODIS crs)
+    # ras = ras.rio.reproject("EPSG:4326")
+    # input_file_name = "_" + str(Path(input_path).name)
+    # input_path_4326 = dir / input_file_name
+    # ras.rio.to_raster(input_path_4326)
 
     if not overwrite and os.path.exists(output_path):
         raise FileExistsError(
@@ -171,6 +171,7 @@ def generate_flood_percent(
 
         # reproject to grid CRS
         ras = ras.rio.reproject(grid_crs)
+        ras.rio.write_crs(grid_crs, inplace=True)
         print("Reprojected raster to grid CRS")
 
     # set target resolution to input else use the raster's x-res
@@ -196,7 +197,22 @@ def generate_flood_percent(
                 rio_shutil.copy(vrt, temp_ras_aligned, driver="GTiff", tiled="YES", compress="LZW")
 
         # clip flood back to original extent keeping new grid alignment
-        cmd = f"rio clip {temp_ras_aligned} {output_path} --like {input_path_4326}".split()
+        with rasterio.open(input_path) as src_in, rasterio.open(temp_ras_aligned) as src_aln:
+            # reproject original MODIS bounds to the aligned/grid CRS
+            L, B, R, T = transform_bounds(src_in.crs, src_aln.crs, *src_in.bounds, densify_pts=21)
+
+            # snap those bounds to the aligned pixel grid
+            win = from_bounds(L, B, R, T, transform=src_aln.transform)
+            Ls, Bs, Rs, Ts = window_bounds(win, transform=src_aln.transform)
+
+        cmd = [
+            "rio", "clip",
+            str(temp_ras_aligned),
+            str(output_path),
+            "--bounds", f"{Ls} {Bs} {Rs} {Ts}",  # ONE string
+            # "--overwrite",                      # add if you want
+        ]
+        # cmd = f"rio clip {temp_ras_aligned} {output_path} --like {input_path}".split()
         cmd += ["--overwrite"] if overwrite else []
 
         subprocess.call(cmd)
@@ -204,7 +220,7 @@ def generate_flood_percent(
     else:
         flood_percent.rio.to_raster(output_path)
 
-    for f in [temp_ras, temp_ras_aligned, input_path_4326]:
+    for f in [temp_ras, temp_ras_aligned]:
         if os.path.exists(f):
             os.remove(f)
             print(f"Removed temporary {f}")
@@ -213,9 +229,3 @@ def generate_flood_percent(
 if __name__ == "__main__":
     generate_flood_percent()
 
-# if __name__ == "__main__":
-#     generate_flood_percent(input_path='/Users/farshidrahmani/Dataset/F1_MODIS_USA/DFO_3625_From_20100310_to_20100324/DFO_3625_From_20100310_to_20100324_merged.tif',
-#                            output_path='/Users/farshidrahmani/Dataset/F1_MODIS_USA_perc_regrid/DFO_3625_From_20100310_to_20100324/DFO_3625_From_20100310_to_20100324_merged.tif',
-#                            grid='/Users/farshidrahmani/Dataset/master_grids_dir/master_250m.tif',
-#                            resolution=250
-#                            )
