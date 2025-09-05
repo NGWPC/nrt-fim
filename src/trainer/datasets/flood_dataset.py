@@ -54,9 +54,9 @@ class FloodDataset(Dataset):
         self.inputs_dict = read_selected_inputs(cfg)
 
         # Capture hourly time and three-hourly time
-        if self.features_hourly is not None:
+        if len(self.features_hourly) > 0:
             self.hourly_time = np.asarray(self.inputs_dict["dyn_vars"][self.features_hourly[0]]["time"])
-        if self.features_threeh is not None:
+        if len(self.features_threeh) > 0:
             self.three_hourly_time = np.asarray(self.inputs_dict["dyn_vars"][self.features_threeh[0]]["time"])
 
         # ---------------- read/prepare stats ----------------
@@ -115,9 +115,9 @@ class FloodDataset(Dataset):
             for name in (self.features_hourly + self.features_threeh):
                 da = self._resolve_dynamic_da(name)  # renames to stats_key
                 self._dyn_vars[name] = da
-                if ("time" in da.dims) and (name in self.features_hourly) and (self.hourly_time is None):
+                if ("time" in da.dims) and (name in self.features_hourly) and (len(self.hourly_time) > 0):
                     self.hourly_time = da["time"].values
-                if ("time" in da.dims) and (name in self.features_threeh) and (self.three_hourly_time is None):
+                if ("time" in da.dims) and (name in self.features_threeh) and (len(self.three_hourly_time) > 0):
                     self.three_hourly_time = da["time"].values
 
         # ensure a master grid if your pipeline depends on it (optional)
@@ -158,12 +158,12 @@ class FloodDataset(Dataset):
         t_3hr = rho // 3
 
         start_hourly_idx = end_hourly_idx = None
-        if self.features_hourly and (self.hourly_time is not None) and (end_time is not None):
+        if (len(self.features_hourly) > 0) and (self.hourly_time is not None) and (end_time is not None):
             end_hourly_idx = int(np.argmin(np.abs(self.hourly_time - end_time)))
             start_hourly_idx = end_hourly_idx - t_hourly
 
         start_3hr_idx = end_3hr_idx = None
-        if self.features_threeh and (self.three_hourly_time is not None) and (end_time is not None):
+        if (len(self.features_threeh) > 0) and (self.three_hourly_time is not None) and (end_time is not None):
             end_3hr_idx = int(np.argmin(np.abs(self.three_hourly_time - end_time)))
             start_3hr_idx = end_3hr_idx - t_3hr
 

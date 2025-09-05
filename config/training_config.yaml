@@ -36,7 +36,7 @@ master_grids_dir: "/Users/farshidrahmani/Dataset/master_grids_dir"
 
 # Which features to include
 features:
-  hourly:        ["precip"] #, "air_temp", "solar_shortwave"]
+  hourly:        [] #["precip"] #, "air_temp", "solar_shortwave"]
   three_hourly:  ["terrain_router", "soil_sm_layer1", "soil_sm_layer2", "soil_sm_layer3", "soil_sm_layer4", "SNOWH", "UGDRNOFF"]
   static:        ["flow_accumulation", "flow_direction", "irrigation", "surface_extent"]
 
