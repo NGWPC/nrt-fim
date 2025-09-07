@@ -36,7 +36,7 @@ master_grids_dir: "/Users/farshidrahmani/Dataset/master_grids_dir"
 
 # Which features to include
 features:
-  hourly:        [] #["precip"] #, "air_temp", "solar_shortwave"]
+  hourly:        ["precip", "air_temp", "solar_shortwave"]
   three_hourly:  ["terrain_router", "soil_sm_layer1", "soil_sm_layer2", "soil_sm_layer3", "soil_sm_layer4", "SNOWH", "UGDRNOFF"]
   static:        ["flow_accumulation", "flow_direction", "irrigation", "surface_extent"]
 
@@ -57,26 +57,29 @@ train:
   lr: 0.001
   epochs: 200
   start_time: 20101001   # YYYYMMDD
-  end_time: 20101201     # YYYYMMDD
+  end_time: 20111001     # YYYYMMDD
   train_frac: 0.7
   num_workers: 0      # controls the number of sub-processes used for data loading
   save_model_interval: 1
 
-#eval:
-#  batch_size: 1
-#  checkpoint: "/Users/farshidrahmani/GitHub/f1-trainer/scripts/runs/0.1.0-f1-mvp/2025-08-21_14-39-41"
-
 statistics:
   chunk_size_y: 3840     # number of grids to read in y axis in each chunk when to calculate stats (3840: full CONUS size)
   chunk_size_x: 4608     # number of grids to read in x axis in each chunk when to calculate stats  (4608: full CONUS size)
-  chunk_size_time: 96    # number of grids to read in time dimension in each chunk when to calculate stats
+  chunk_size_time: 72    # number of grids to read in time dimension in each chunk when to calculate stats
   calculate_p10_p90: False   # if we want to calculate p10 and p90. For some methods of normalization, we may need it
   n_bins: 100            # to calculate p10 and p90
+  ignore_values_for_inputs: [255.0, 1e+20]   # list of values that should be ignored
+  flag_larger_as_nodata_for_inputs: True     # True or False, to remove values larger than "large_threshold" for stats calculation
+  large_threshold_for_inputs: 1e+19     # if "flag_larger_as_nodata_for_inputs==True", then this value works as a threshold
+  ignore_values_for_obs: [ 255.0, 1e+20 ]   # list of values that should be ignored
+  flag_larger_as_nodata_for_obs: True     # True or False, to remove values larger than "large_threshold" for stats calculation
+  large_threshold_for_obs: 1e+19     # if "flag_larger_as_nodata_for_inputs==True", then this value works as a threshold
 
 normalization:
   fix_nan_with_dyn_inp: "mean"    # if there is nan/inf in the inputs, it will be filled with either "zero", "mean", "min", "max". they are all in normalized space.
   fix_nan_with_static_inp: "mean"
   fix_nan_with_obs: False    # same concept as above but for obs. normally, we don't change the values. loss function takes care of nan obs values
+
 np_seed: 1
 seed: 0
 device: "mps:0"

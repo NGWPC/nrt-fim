@@ -1,27 +1,32 @@
 from __future__ import annotations
+
 import logging
 import os
-import fiona
+from collections.abc import Iterable
 from pathlib import Path
-import numpy as np
+from typing import Any
+
+import fiona
 import matplotlib.pyplot as plt
+import numpy as np
 import rasterio
 import xarray as xr
-from typing import Iterable, Optional, Tuple, Union
-from rasterio.crs import CRS
 from pyproj import CRS as PJCRS
 from pyproj import Transformer
-from shapely.geometry import box, shape
-from shapely.ops import unary_union, transform as shp_transform
-from shapely.geometry import Polygon, MultiPolygon
-
-from rasterio.warp import transform_bounds
+from rasterio.crs import CRS
+from rasterio.errors import CRSError
 from rasterio.transform import from_origin
+from rasterio.warp import transform_bounds
+from rioxarray.exceptions import MissingCRS
+from shapely.geometry import MultiPolygon, Polygon, box, shape
+from shapely.ops import transform as shp_transform
+from shapely.ops import unary_union
 
 logging.getLogger("rasterio").setLevel(logging.ERROR)
 logging.getLogger("rasterio._env").setLevel(logging.ERROR)
 
 log = logging.getLogger(__name__)
+
 
 def infer_crs(obj) -> CRS:
     """
@@ -30,13 +35,11 @@ def infer_crs(obj) -> CRS:
     Prefers rioxarray's attached CRS; otherwise tries 'crs' variable WKT.
     Raises if nothing is found.
     """
-    # 1) If it already has a rioxarray CRS, use it
-    try:
-        crs = getattr(getattr(obj, "rio", None), "crs", None)
-        if crs is not None:
-            return crs  # rasterio.CRS
-    except Exception:
-        pass
+    # 1) rioxarray accessor
+    rio = getattr(obj, "rio", None)
+    crs = getattr(rio, "crs", None)
+    if crs is not None:
+        return crs  # already a rasterio.CRS
 
     # 2) Dataset with 'crs' var carrying WKT
     if isinstance(obj, xr.Dataset) and "crs" in obj:
@@ -53,21 +56,22 @@ def infer_crs(obj) -> CRS:
 
     raise ValueError("No CRS found on object and no usable WKT in attributes.")
 
+
 def extract_floodid(path: str) -> str:
     """Parse the floodID from a path of form .../DFO_<floodID>_<start>_<end>/file.tif"""
     dir_name = os.path.basename(os.path.dirname(path))
     parts = dir_name.split("_")
     return parts[1] if len(parts) > 1 else dir_name
 
-def compute_modis_bboxes(paths: Iterable[str],
-                          input_crs: str,
-                          bounds: tuple
-                          ) -> dict[str, tuple[float, float, float, float]]:
+
+def compute_modis_bboxes(
+    paths: Iterable[str], input_crs: str, bounds: tuple
+) -> dict[str, tuple[float, float, float, float]]:
     """Read each MODIS TIFF, transform its bounds to the input CRS, and return a dict
 
     mapping floodID to (left, bottom, right, top) for CONUS events.
-    Accept any partial overlap with the USA CONUS area."""
-
+    Accept any partial overlap with the USA CONUS area.
+    """
     # CONUS bounding box in WGS84 (lon/lat)
     # conus_wgs84 = (-124.848974, 24.396308, -66.885444, 49.384358)
     ref_bounds = bounds
@@ -96,25 +100,27 @@ def compute_modis_bboxes(paths: Iterable[str],
 
 def compute_modis_overlap_bboxes(
     paths: Iterable[str],
-    input_crs: Union[str, CRS],
-    conus_shp_gpkg_path: Union[str, Path],
-    conus_layer: Optional[str] = None,
-) -> Dict[str, Tuple[float, float, float, float]]:
+    input_crs: str | CRS,
+    conus_shp_gpkg_path: str | Path,
+    conus_layer: str | None = None,
+) -> dict[str, tuple[float, float, float, float]]:
     """
     For each MODIS GeoTIFF:
+
       1) Get raster bounds in native CRS,
       2) Reproject bounds to `input_crs`,
       3) Intersect with CONUS polygon from a GeoPackage (also in `input_crs`),
       4) If intersection exists, store the intersection bbox.
 
-    Returns:
+    Returns
+    -------
       { flood_id : (minx, miny, maxx, maxy) } in `input_crs`.
     """
     target_crs_rio = _to_rio_crs(input_crs)
     target_crs_pj = _to_pyproj_crs(target_crs_rio)
 
     conus_geom = _load_conus_geom_gpkg(conus_shp_gpkg_path, target_crs=target_crs_rio, layer=conus_layer)
-    out: Dict[str, Tuple[float, float, float, float]] = {}
+    out: dict[str, tuple[float, float, float, float]] = {}
 
     for path in paths:
         floodid = extract_floodid(path)
@@ -141,13 +147,15 @@ def compute_modis_overlap_bboxes(
         # plt.show()
     return out
 
+
 def _load_conus_geom_gpkg(
-    gpkg_path: Union[str, Path],
-    target_crs: Union[str, CRS],
-    layer: Optional[str] = None,
+    gpkg_path: str | Path,
+    target_crs: str | CRS,
+    layer: str | None = None,
 ):
     """
     Read a CONUS polygon/multipolygon from a GeoPackage, merge all parts,
+
     and reproject to target_crs. If layer is None, picks the first
     polygon/multipolygon layer.
     """
@@ -186,9 +194,8 @@ def _load_conus_geom_gpkg(
 
     return geom
 
-def filter_modis_paths(paths: Iterable[str],
-                        bboxes: dict[str, tuple]
-                        ) -> list[str]:
+
+def filter_modis_paths(paths: Iterable[str], bboxes: dict[str, tuple]) -> list[str]:
     """Filter flood events outside CONUS using computed bboxes, log excluded IDs, and return sorted list of valid paths."""
     keep = []
     for path in paths:
@@ -200,8 +207,7 @@ def filter_modis_paths(paths: Iterable[str],
     return sorted(keep)
 
 
-
-def _to_rio_crs(crs_like: Union[str, CRS]) -> CRS:
+def _to_rio_crs(crs_like: str | CRS) -> CRS:
     """
     Normalize a CRS input to rasterio.CRS.
 
@@ -214,7 +220,9 @@ def _to_rio_crs(crs_like: Union[str, CRS]) -> CRS:
         return CRS.from_string(crs_like)
     raise TypeError(f"Unsupported CRS type: {type(crs_like)}")
 
-def _to_pyproj_crs(crs_like: Union[str, CRS, PJCRS]) -> PJCRS:
+
+def _to_pyproj_crs(crs_like: str | CRS | PJCRS) -> PJCRS:
+    """Converts crt to pyproj style crs"""
     if isinstance(crs_like, PJCRS):
         return crs_like
     if isinstance(crs_like, CRS):
@@ -222,11 +230,12 @@ def _to_pyproj_crs(crs_like: Union[str, CRS, PJCRS]) -> PJCRS:
         return PJCRS.from_wkt(crs_like.to_wkt())
     return PJCRS.from_user_input(crs_like)
 
+
 def create_master_from_bounds(
-    crs_like: Union[str, CRS],
-    bounds: Tuple[float, float, float, float],  # (minx, miny, maxx, maxy)
+    crs_like: str | CRS,
+    bounds: tuple[float, float, float, float],  # (minx, miny, maxx, maxy)
     master_path: str | Path,
-    resolution: float = 250.0,                  # interpreted in the CRS units
+    resolution: float = 250.0,  # interpreted in the CRS units
     nodata: float = np.nan,
     fill_value: float = 0.0,
     dtype: str = "float32",
@@ -248,21 +257,19 @@ def create_master_from_bounds(
     if not (maxx > minx and maxy > miny):
         raise ValueError(f"Invalid bounds: {bounds}")
 
-    # sanity warning: degrees vs meters
-    try:
-        if getattr(crs, "is_geographic", False):
-            log.warning(
-                "Master grid CRS is geographic (degrees). The 'resolution' "
-                "will be interpreted in degrees (not meters)."
-            )
-    except Exception:
-        pass
+    if getattr(crs, "is_geographic", False):
+        log.warning(
+            "Master grid CRS is geographic (degrees). The 'resolution' "
+            "will be interpreted in degrees (not meters)."
+        )
 
     # size and transform (top-left origin)
-    width  = int(np.ceil((maxx - minx) / float(resolution)))
+    width = int(np.ceil((maxx - minx) / float(resolution)))
     height = int(np.ceil((maxy - miny) / float(resolution)))
     if width <= 0 or height <= 0:
-        raise ValueError(f"Computed non-positive raster size: {(height, width)} from bounds={bounds} and res={resolution}")
+        raise ValueError(
+            f"Computed non-positive raster size: {(height, width)} from bounds={bounds} and res={resolution}"
+        )
 
     transform = from_origin(minx, maxy, float(resolution), float(resolution))
 
@@ -289,83 +296,137 @@ def create_master_from_bounds(
     log.info(f"→ Master grid written to {master_path} (H={height}, W={width}, CRS={crs.to_string()})")
 
 
-def _ensure_master_grid(
-    cfg,
-    inputs_dict: dict,
-) -> str | None:
+def _ensure_master_grid(cfg: Any, inputs_dict: dict[str, Any]) -> str | None:
     """
-    Ensure a master grid exists using `inputs_dict['input_crs']` and `inputs_dict['union_bounds']`.
+    Ensure a master grid exists using inputs_dict['input_crs'] and inputs_dict['union_bounds'].
 
-    Expected keys in inputs_dict:
-      - 'input_crs'     : CRS (str or rasterio.CRS) that all bounds were transformed into
-      - 'union_bounds'  : (minx, miny, maxx, maxy) in `input_crs`
+    Required:
+      - cfg.master_grids_dir (path-like)
+      - cfg.params.resolution (numeric)
+      - inputs_dict['input_crs']  : str | rasterio.CRS
+      - inputs_dict['union_bounds']: (minx, miny, maxx, maxy) in input_crs
     """
+    # --- validate cfg fields ---
     try:
-        grid_path = Path(cfg.master_grids_dir) / f"master_{cfg.params.resolution}m.tif"
+        grids_dir = Path(cfg.master_grids_dir)
+    except AttributeError as e:
+        log.warning(f"Missing cfg.master_grids_dir: {e}")
+        return None
+
+    try:
+        resolution = float(cfg.params.resolution)
+    except (AttributeError, TypeError, ValueError) as e:
+        log.warning(f"Invalid cfg.params.resolution: {e}")
+        return None
+
+    # --- build target path ---
+    grid_path = grids_dir / f"master_{int(resolution)}m.tif"
+    try:
         grid_path.parent.mkdir(parents=True, exist_ok=True)
-        if grid_path.exists():
-            return str(grid_path)
+    except (OSError, PermissionError) as e:
+        log.warning(f"Cannot create directory for master grid ({grid_path.parent}): {e}")
+        return None
 
-        # pull reference CRS + bounds from inputs_dict
-        ref_crs = inputs_dict.get("input_crs", None)
-        ref_bounds = inputs_dict.get("union_bounds", None)
-        if ref_crs is None or ref_bounds is None:
-            raise ValueError("inputs_dict must provide 'input_crs' and 'union_bounds' to build the master grid.")
+    if grid_path.exists():
+        return str(grid_path)
 
+    # --- pull CRS + bounds from inputs_dict ---
+    try:
+        ref_crs_like = inputs_dict["input_crs"]
+        ref_bounds = inputs_dict["union_bounds"]
+    except KeyError as e:
+        log.warning(f"inputs_dict missing required key: {e}")
+        return None
+
+    # normalize CRS
+    try:
+        ref_crs = _to_rio_crs(ref_crs_like)
+    except (TypeError, CRSError, ValueError) as e:
+        log.warning(f"Invalid input CRS in inputs_dict['input_crs']: {e}")
+        return None
+
+    # validate bounds
+    if (not isinstance(ref_bounds, tuple | list)) or len(ref_bounds) != 4:
+        log.warning(f"Invalid bounds (expect 4-tuple): {ref_bounds!r}")
+        return None
+    try:
+        minx, miny, maxx, maxy = map(float, ref_bounds)
+    except (TypeError, ValueError) as e:
+        log.warning(f"Bounds must be numeric: {ref_bounds!r} ({e})")
+        return None
+
+    # --- create the grid ---
+    try:
         create_master_from_bounds(
             crs_like=ref_crs,
-            bounds=ref_bounds,
+            bounds=(minx, miny, maxx, maxy),
             master_path=str(grid_path),
-            resolution=float(cfg.params.resolution),
-            nodata=np.nan,
-            fill_value=255.0,
+            resolution=resolution,
+            nodata=np.nan,  # embedded nodata value
+            fill_value=255.0,  # actual pixel fill value
             dtype="float32",
             compress="lzw",
         )
-
-    except Exception as e:
+        return str(grid_path)
+    except (ValueError, TypeError, CRSError, OSError, PermissionError) as e:
         log.warning(f"Could not ensure master grid (skipping --grid): {e}")
+        return None
 
 
 # -------------------------------------------------------------------------
 # (Optional) Backward-compatible shim if any legacy code still passes a DA:
 # -------------------------------------------------------------------------
 def create_master_from_da(
-    da, master_path: str | Path, resolution: float = 250.0, nodata: float = np.nan, dtype: str = "float32", compress: str = "lzw"
+    da,
+    master_path: str | Path,
+    resolution: float = 250.0,
+    nodata: float = np.nan,
+    dtype: str = "float32",
+    compress: str = "lzw",
 ) -> None:
     """
     Compatibility wrapper: derive (crs, bounds) from a DataArray and call create_master_from_bounds().
+
+    Requires 'x' and 'y' coordinates on the DataArray.
     """
-    try:
-        import rioxarray  # noqa: F401
-    except Exception as _:
-        pass
+    # --- validate spatial coordinates ---
+    if "x" not in da.coords or "y" not in da.coords:
+        raise ValueError("DataArray must have 'x' and 'y' coordinates to derive bounds.")
 
     # bounds from coordinates
-    minx = float(da.x.min())
-    maxx = float(da.x.max())
-    miny = float(da.y.min())
-    maxy = float(da.y.max())
-
-    # robust CRS inference
-    crs = None
     try:
-        from trainer.utils.geo_utils import infer_crs  # if you have this helper
-        crs = infer_crs(da)
-    except Exception:
-        # fallbacks: rioxarray, WKT attrs, etc.
+        minx = float(da.x.min())
+        maxx = float(da.x.max())
+        miny = float(da.y.min())
+        maxy = float(da.y.max())
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Could not compute bounds from 'x'/'y' coordinates: {e}") from e
+
+    # --- robust CRS inference with specific exceptions ---
+    crs = None
+
+    # 1) primary: your infer_crs helper
+    try:
+        crs = infer_crs(da)  # should return a rasterio.CRS
+    except (MissingCRS, CRSError, ValueError, AttributeError, KeyError):
+        crs = None
+
+    # 2) fallback: rioxarray accessor property (should not raise, but guard anyway)
+    if crs is None:
         try:
-            if getattr(da, "rio", None) is not None:
-                crs = da.rio.crs
-        except Exception:
+            crs = getattr(da.rio, "crs", None)
+        except AttributeError:
             crs = None
-        if crs is None:
-            wkt = da.attrs.get("spatial_ref") or da.attrs.get("esri_pe_string")
-            if wkt:
-                try:
-                    crs = CRS.from_wkt(wkt)
-                except Exception:
-                    crs = None
+
+    # 3) fallback: WKT-like attrs commonly seen on EO rasters
+    if crs is None:
+        wkt = da.attrs.get("spatial_ref") or da.attrs.get("esri_pe_string")
+        if wkt:
+            try:
+                crs = CRS.from_wkt(wkt)
+            except (CRSError, ValueError, TypeError):
+                crs = None
+
     if crs is None:
         log.warning("No CRS found on DataArray; defaulting to EPSG:4326")
         crs = CRS.from_epsg(4326)
@@ -379,6 +440,7 @@ def create_master_from_da(
         dtype=dtype,
         compress=compress,
     )
+
 
 def _iter_polys(geom):
     """Yield polygons from Polygon/MultiPolygon; ignore empties."""
@@ -394,22 +456,33 @@ def _iter_polys(geom):
         # If it's something else (e.g., GeometryCollection), try to pull polygons
         try:
             for g in geom.geoms:
-                if isinstance(g, (Polygon, MultiPolygon)) and not g.is_empty:
+                if isinstance(g, Polygon | MultiPolygon) and not g.is_empty:
                     yield from _iter_polys(g)
         except AttributeError:
             return
+
 
 def _plot_geom(ax, geom, facecolor=None, edgecolor="k", alpha=0.3, linewidth=1.0, zorder=1, label=None):
     """Plot Polygon/MultiPolygon (with holes) on an axis."""
     for poly in _iter_polys(geom):
         # exterior
         x, y = poly.exterior.xy
-        ax.fill(x, y, facecolor=facecolor, edgecolor=edgecolor, alpha=alpha, linewidth=linewidth, zorder=zorder, label=label)
+        ax.fill(
+            x,
+            y,
+            facecolor=facecolor,
+            edgecolor=edgecolor,
+            alpha=alpha,
+            linewidth=linewidth,
+            zorder=zorder,
+            label=label,
+        )
         label = None  # only label first piece
         # holes (interiors)
         for ring in poly.interiors:
             xi, yi = ring.xy
-            ax.fill(xi, yi, facecolor="white", edgecolor="none", alpha=1.0, zorder=zorder+0.1)
+            ax.fill(xi, yi, facecolor="white", edgecolor="none", alpha=1.0, zorder=zorder + 0.1)
+
 
 def plot_overlap_debug(raster_geom, conus_geom, overlap_geom, ax=None):
     """
@@ -421,11 +494,38 @@ def plot_overlap_debug(raster_geom, conus_geom, overlap_geom, ax=None):
         fig, ax = plt.subplots(figsize=(8, 6))
 
     # Draw order: CONUS (base), raster (outline), overlap (highlight)
-    _plot_geom(ax, conus_geom, facecolor="#CCCCCC", edgecolor="#666666", alpha=0.4, linewidth=0.8, zorder=1, label="CONUS")
-    _plot_geom(ax, raster_geom, facecolor="none", edgecolor="#1f77b4", alpha=1.0, linewidth=1.5, zorder=2, label="Raster footprint")
+    _plot_geom(
+        ax,
+        conus_geom,
+        facecolor="#CCCCCC",
+        edgecolor="#666666",
+        alpha=0.4,
+        linewidth=0.8,
+        zorder=1,
+        label="CONUS",
+    )
+    _plot_geom(
+        ax,
+        raster_geom,
+        facecolor="none",
+        edgecolor="#1f77b4",
+        alpha=1.0,
+        linewidth=1.5,
+        zorder=2,
+        label="Raster footprint",
+    )
 
     if overlap_geom is not None and not overlap_geom.is_empty:
-        _plot_geom(ax, overlap_geom, facecolor="#ff7f0e", edgecolor="#d95f02", alpha=0.5, linewidth=1.0, zorder=3, label="Overlap")
+        _plot_geom(
+            ax,
+            overlap_geom,
+            facecolor="#ff7f0e",
+            edgecolor="#d95f02",
+            alpha=0.5,
+            linewidth=1.0,
+            zorder=3,
+            label="Overlap",
+        )
 
     # Set bounds with a small margin
     geoms_to_bound = [g for g in [conus_geom, raster_geom, overlap_geom] if g is not None and not g.is_empty]
@@ -443,12 +543,13 @@ def plot_overlap_debug(raster_geom, conus_geom, overlap_geom, ax=None):
 
     # Build a clean legend (avoid duplicate labels)
     handles, labels = ax.get_legend_handles_labels()
-    dedup = dict(zip(labels, handles))
+    dedup = dict(zip(labels, handles, strict=False))
     if dedup:
         ax.legend(dedup.values(), dedup.keys(), loc="best", frameon=True)
 
     ax.set_title("Raster footprint vs CONUS and Overlap")
     return ax
+
 
 # ax = plot_overlap_debug(raster_geom, conus_geom, overlap)
 # plt.show()

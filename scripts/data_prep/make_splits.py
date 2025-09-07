@@ -41,7 +41,7 @@ def write_splits(cfg: DictConfig):
 
     #writing down testing IDs
     with open(Path(splits_dir / "eval.json"), "w") as json_file:
-        json.dump(train_ids, json_file, indent=4)
+        json.dump(test_ids, json_file, indent=4)
 
     print(f"Wrote splits to {splits_dir}: {len(train_ids)=}, {len(test_ids)=}")
 

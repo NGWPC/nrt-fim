@@ -1,39 +1,43 @@
 from __future__ import annotations
+import os
 import json
 from pathlib import Path
 from typing import Dict, Any, Iterable, Optional, Tuple
-
+import logging
 import numpy as np
 import xarray as xr
 import rasterio
 from rasterio.windows import Window
+import dask
 
+log = logging.getLogger(__name__)
 
-# -----------------------------
-# Online, streaming statistics
-# -----------------------------
 class OnlineStats:
     """
-    Streaming mean/var/min/max + percentile estimation via 2-pass histogram.
+    Streaming mean/var/min/max for blocks, with optional sentinel masking.
 
-    Ignores NaN/Inf and user-provided sentinel values.
+    Accepts either NumPy arrays or xarray.DataArray (dask-backed or in-memory).
+
+    For xarray inputs:
+      - no .values calls
+      - uses dask graphs and computes scalars in one dask.compute(...)
     """
 
     def __init__(self):
-        self.n = 0
+        self.n   = 0
         self.mean = 0.0
-        self.M2 = 0.0
-        self.min = np.inf
-        self.max = -np.inf
+        self.M2   = 0.0
+        self.min  =  np.inf
+        self.max  = -np.inf
 
-    def _sanitize_1d(
+    # ---------------- NumPy path ----------------
+    def _sanitize_1d_np(
         self,
         arr1d: np.ndarray,
         ignore_values: Optional[Iterable[float]] = (255.0, 1e20),
         also_flag_large_as_nodata: bool = True,
         large_threshold: float = 1e19,
     ) -> np.ndarray:
-        """Return finite values only, masking common nodata sentinels."""
         a = arr1d.astype("float64", copy=False)
         if ignore_values:
             for v in ignore_values:
@@ -43,15 +47,14 @@ class OnlineStats:
         a = a[np.isfinite(a)]
         return a
 
-    def update(
+    def _update_np(
         self,
         data: np.ndarray,
-        ignore_values: Optional[Iterable[float]] = (255.0, 1e20),
-        also_flag_large_as_nodata: bool = True,
-        large_threshold: float = 1e19,
-    ):
-        """Update running stats with one block."""
-        flat = self._sanitize_1d(
+        ignore_values: Optional[Iterable[float]],
+        also_flag_large_as_nodata: bool,
+        large_threshold: float,
+    ) -> None:
+        flat = self._sanitize_1d_np(
             data.ravel(),
             ignore_values=ignore_values,
             also_flag_large_as_nodata=also_flag_large_as_nodata,
@@ -60,25 +63,133 @@ class OnlineStats:
         if flat.size == 0:
             return
 
-        nB = flat.size
-        meanB = float(flat.mean())
-        M2B = float(((flat - meanB) ** 2).sum())
-        minB, maxB = float(flat.min()), float(flat.max())
+        nB     = flat.size
+        meanB  = float(flat.mean())
+        M2B    = float(((flat - meanB) ** 2).sum())
+        minB   = float(flat.min())
+        maxB   = float(flat.max())
 
-        # min/max
+        # update min/max
         self.min = min(self.min, minB)
         self.max = max(self.max, maxB)
 
-        # Welford’s update
+        # Welford update
         if self.n == 0:
             self.n, self.mean, self.M2 = nB, meanB, M2B
         else:
             delta = meanB - self.mean
-            nA = self.n
-            n = nA + nB
+            nA    = self.n
+            n     = nA + nB
             self.mean = (nA * self.mean + nB * meanB) / n
-            self.M2 = self.M2 + M2B + (delta * delta) * nA * nB / n
-            self.n = n
+            self.M2   = self.M2 + M2B + (delta * delta) * nA * nB / n
+            self.n    = n
+
+    # ---------------- xarray path ----------------
+    def _sanitize_xr(
+        self,
+        da: xr.DataArray,
+        ignore_values: Optional[Iterable[float]] = (255.0, 1e20),
+        also_flag_large_as_nodata: bool = True,
+        large_threshold: float = 1e19,
+    ) -> xr.DataArray:
+        """
+        Return a float32 DataArray with nodata as NaN, using vectorized/xarray ops.
+        """
+        a = da.astype("float32")
+
+        if ignore_values:
+            for v in ignore_values:
+                a = xr.where(a == v, np.nan, a)
+
+        if also_flag_large_as_nodata:
+            a = xr.where(np.abs(a) > large_threshold, np.nan, a)
+
+        # mask inf/-inf
+        a = a.where(np.isfinite(a))
+        return a
+
+    def _update_xr(
+        self,
+        da: xr.DataArray,
+        ignore_values: Optional[Iterable[float]],
+        also_flag_large_as_nodata: bool,
+        large_threshold: float,
+    ) -> None:
+        """
+        Compute per-block scalars from an xarray.DataArray (dask-aware) without .values.
+        """
+        # sanitize
+        a = self._sanitize_xr(
+            da,
+            ignore_values=ignore_values,
+            also_flag_large_as_nodata=also_flag_large_as_nodata,
+            large_threshold=large_threshold,
+        )
+
+        # flatten while keeping it a DataArray (no materialization)
+        flat = a.stack(z=a.dims)
+
+        # build lazy scalars (all in one graph)
+        count = flat.count(dim="z")
+        meanB = flat.mean(dim="z", skipna=True)
+        minB  = flat.min (dim="z", skipna=True)
+        maxB  = flat.max (dim="z", skipna=True)
+        # second central moment sum: sum((x - mean)^2)
+        diff  = flat - meanB
+        M2B   = (diff * diff).sum(dim="z", skipna=True)
+
+        # compute all together
+        count_v, mean_v, min_v, max_v, M2_v = dask.compute(count, meanB, minB, maxB, M2B)
+
+        nB    = int(count_v.item()) if hasattr(count_v, "item") else int(count_v)
+        if nB == 0:
+            return
+
+        meanB = float(mean_v.item() if hasattr(mean_v, "item") else mean_v)
+        minB  = float(min_v.item()  if hasattr(min_v,  "item") else min_v)
+        maxB  = float(max_v.item()  if hasattr(max_v,  "item") else max_v)
+        M2B   = float(M2_v.item()   if hasattr(M2_v,   "item")  else M2_v)
+
+        # update min/max
+        self.min = min(self.min, minB)
+        self.max = max(self.max, maxB)
+
+        # Welford update
+        if self.n == 0:
+            self.n, self.mean, self.M2 = nB, meanB, M2B
+        else:
+            delta = meanB - self.mean
+            nA    = self.n
+            n     = nA + nB
+            self.mean = (nA * self.mean + nB * meanB) / n
+            self.M2   = self.M2 + M2B + (delta * delta) * nA * nB / n
+            self.n    = n
+
+    # ---------------- public API ----------------
+    def update(
+        self,
+        data: np.ndarray | xr.DataArray,
+        ignore_values: Optional[Iterable[float]] = (255.0, 1e20),
+        also_flag_large_as_nodata: bool = True,
+        large_threshold: float = 1e19,
+    ) -> None:
+        """
+        Update running stats with one block of data (NumPy or xarray).
+        """
+        if isinstance(data, xr.DataArray):
+            self._update_xr(
+                data,
+                ignore_values=ignore_values,
+                also_flag_large_as_nodata=also_flag_large_as_nodata,
+                large_threshold=large_threshold,
+            )
+        else:
+            self._update_np(
+                np.asarray(data),
+                ignore_values=ignore_values,
+                also_flag_large_as_nodata=also_flag_large_as_nodata,
+                large_threshold=large_threshold,
+            )
 
     def finalize(self) -> Dict[str, float]:
         var = (self.M2 / self.n) if self.n > 0 else np.nan
@@ -89,7 +200,6 @@ class OnlineStats:
             "mean": float(self.mean) if self.n > 0 else np.nan,
             "std": float(np.sqrt(var)) if np.isfinite(var) else np.nan,
         }
-
 
 # ---------------------------------------
 # Helpers to iterate blocks from inputs
@@ -126,7 +236,8 @@ def _iter_blocks_dynamic_3d(
             y1 = min(ny, y0 + chunk_y)
             for x0 in range(0, nx, chunk_x):
                 x1 = min(nx, x0 + chunk_x)
-                block = da.isel(time=slice(t0, t1), y=slice(y0, y1), x=slice(x0, x1)).values
+                block = da.isel(time=slice(t0, t1), y=slice(y0, y1), x=slice(x0, x1))    #.values
+                print(f" chunk t of {t1} out of {nt} is calculated for {da.name}")
                 yield block  # (t,y,x)
 
 
@@ -293,6 +404,7 @@ class InputStatsComputer:
         chunk_size_x: int = 512,
         n_bins: int = 1000,
         calculate_p10_p90: bool = False,
+        stats_path: Optional[str] = None,
     ) -> Dict[str, Dict[str, float]]:
         """
         Compute stats for everything in inputs_dict the user selected:
@@ -308,15 +420,37 @@ class InputStatsComputer:
             # make sure it has expected dims
             if not all(dim in da.dims for dim in ("y", "x")):
                 raise ValueError(f"Dynamic var '{name}' missing required dims (y,x). Got dims={da.dims}")
-            out[name] = self._two_pass_stats_dynamic(
-                da=da,
-                time_range=time_range,
-                chunk_t=chunk_size_time,
-                chunk_y=chunk_size_y,
-                chunk_x=chunk_size_x,
-                n_bins=n_bins,
-                calculate_p10_p90=calculate_p10_p90
-            )
+            if os.path.exists(stats_path):
+                with open(stats_path, "r") as f:
+                    out = json.load(f)
+                if name not in out:
+                    out[name] = self._two_pass_stats_dynamic(
+                        da=da,
+                        time_range=time_range,
+                        chunk_t=chunk_size_time,
+                        chunk_y=chunk_size_y,
+                        chunk_x=chunk_size_x,
+                        n_bins=n_bins,
+                        calculate_p10_p90=calculate_p10_p90
+                    )
+                    with open(stats_path, "w") as f:
+                        json.dump(out, f, indent=2)
+            else:
+                out[name] = self._two_pass_stats_dynamic(
+                    da=da,
+                    time_range=time_range,
+                    chunk_t=chunk_size_time,
+                    chunk_y=chunk_size_y,
+                    chunk_x=chunk_size_x,
+                    n_bins=n_bins,
+                    calculate_p10_p90=calculate_p10_p90
+                )
+
+            log.info(f"stats for '{name}' has been computed")
+            if stats_path is not None:
+                with open(stats_path, "w") as f:
+                    json.dump(out, f, indent=2)
+
 
         # statics
         for name, path in (inputs_dict.get("static_paths") or {}).items():
@@ -327,6 +461,7 @@ class InputStatsComputer:
                 n_bins=n_bins,
                 calculate_p10_p90=calculate_p10_p90
             )
+            log.info(f"stats for '{name}' has been computed")
 
         return out
 
@@ -365,7 +500,8 @@ class InputStatsComputer:
             chunk_size_y=chunk_size_y,
             chunk_size_x=chunk_size_x,
             n_bins=n_bins,
-            calculate_p10_p90=calculate_p10_p90
+            calculate_p10_p90=calculate_p10_p90,
+            stats_path=stats_path
         )
         with open(stats_path, "w") as f:
             json.dump(stats, f, indent=2)

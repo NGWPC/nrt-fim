@@ -69,6 +69,7 @@ dependencies = [
   "torchvision==0.21.0",
   "torchgeo>=0.7.1",
   "awscli>=1.38.3",
+  "dask>=2025.7.0",
 ]
 
 [project.optional-dependencies]

@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import logging
 import random
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -13,13 +15,10 @@ import torch
 import xarray as xr
 from geocube.api.core import make_geocube
 from matplotlib.colors import LinearSegmentedColormap
-from rasterio.merge import merge
-from rasterio.transform import from_origin
-from rioxarray.exceptions import MissingCRS
-from typing import Optional, Union, Sequence
+from omegaconf import DictConfig
 from rasterio.crs import CRS
+from rasterio.merge import merge
 from rasterio.transform import Affine
-from trainer.utils.geo_utils import infer_crs
 
 log = logging.getLogger(__name__)
 
@@ -136,16 +135,14 @@ def save_prediction_image(pred_tensor, epoch, save_dir, statistics, batch=None):
 
 
 def save_array_as_gtiff(
-    arr_hw: np.ndarray,                         # (H, W)
-    out_path: Union[str, Path],                 # where to write
-    transform: Union[Affine, Sequence[float]],  # Affine or GDAL 6-tuple
-    crs: Union[str, CRS],                       # e.g. "EPSG:4326" or rasterio.crs.CRS
-    nodata: Optional[float] = None,
-    dtype: Optional[np.dtype] = None,
+    arr_hw: np.ndarray,  # (H, W)
+    out_path: str | Path,  # where to write
+    transform: Affine | Sequence[float],  # Affine or GDAL 6-tuple
+    crs: str | CRS,  # e.g. "EPSG:4326" or rasterio.crs.CRS
+    nodata: float | None = None,
+    dtype: np.dtype | None = None,
 ) -> None:
-    """
-    Save a single-band array as a GeoTIFF using the provided transform and CRS.
-    """
+    """Save a single-band array as a GeoTIFF using the provided transform and CRS."""
     out_path = Path(out_path)
     arr = np.asarray(arr_hw)
     if arr.ndim != 2:
@@ -157,7 +154,7 @@ def save_array_as_gtiff(
     # Coerce transform
     if isinstance(transform, Affine):
         tfm = transform
-    elif isinstance(transform, (tuple, list)) and len(transform) == 6:
+    elif isinstance(transform, tuple | list) and len(transform) == 6:
         tfm = Affine.from_gdal(*transform)  # (a,b,c,d,e,f)
     else:
         raise ValueError("transform must be an Affine or a 6-tuple/list in GDAL order")
@@ -191,6 +188,7 @@ def save_array_as_gtiff(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(out_path, "w", **profile) as dst:
         dst.write(arr_out, 1)
+
 
 def rasterize(
     input_vector: str | Path | gpd.GeoDataFrame,
@@ -288,91 +286,6 @@ def save_state(
     )
 
 
-# if __name__ == "__main__":
-#     start_time = datetime.strptime("20190520 000000", "%Y%m%d %H%M%S")
-#     end_time = datetime.strptime("20190602 230000", "%Y%m%d %H%M%S")
-#     read(start_time, end_time)
-
-
-# def create_master_from_da(
-#     da,
-#     master_path: str,
-#     resolution: float = 250.0,
-#     nodata: float = np.nan,
-#     dtype: str = "float32",
-#     compress: str = "lzw",
-# ):
-#     """
-#     Create a blank GeoTIFF grid at `resolution` covering the full extent of `da`.
-#
-#     - da must have .x and .y coordinates in projected units (e.g. meters).
-#     - da must carry its CRS either in da.rio.crs, da.attrs['esri_pe_string'], or da.attrs['proj4'].
-#     """
-#     # 1) grab spatial bounds
-#     left = float(da.x.min())
-#     right = float(da.x.max())
-#     bottom = float(da.y.min())
-#     top = float(da.y.max())
-#
-#     # 2) compute output size
-#     width = int(np.ceil((right - left) / resolution))
-#     height = int(np.ceil((top - bottom) / resolution))
-#
-#     # 3) build Affine transform (upper-left corner)
-#     transform = from_origin(left, top, resolution, resolution)
-#
-#     # 4) detect CRS
-#     crs = None
-#
-#     # 4a) try rioxarray accessor
-#     try:
-#         crs = infer_crs(da)
-#     except (MissingCRS, AttributeError):
-#         crs = None
-#
-#     # 4b) fallback to ESRI WKT (esri_pe_string or spatial_ref)
-#     if crs is None:
-#         wkt = da.attrs.get("esri_pe_string") or da.attrs.get("spatial_ref")
-#         if wkt:
-#             try:
-#                 crs = CRS.from_wkt(wkt)
-#             except (ValueError, TypeError) as e:
-#                 log.warning(f"Failed to parse WKT CRS: {e}; will try PROJ4 next")
-#
-#     # 4c) fallback to PROJ4 string
-#     if crs is None:
-#         proj4 = da.attrs.get("proj4")
-#         if proj4:
-#             try:
-#                 crs = CRS.from_string(proj4)
-#             except (ValueError, TypeError) as e:
-#                 log.warning(f"Failed to parse PROJ4 CRS: {e}; will default to EPSG:4326")
-#
-#     # 4d) final default
-#     if crs is None:
-#         log.warning("No CRS found on DataArray; defaulting to EPSG:4326")
-#         crs = CRS.from_epsg(4326)
-#
-#     # 5) write blank raster
-#     profile = {
-#         "driver": "GTiff",
-#         "dtype": dtype,
-#         "count": 1,
-#         "crs": crs,
-#         "transform": transform,
-#         "width": width,
-#         "height": height,
-#         "nodata": nodata,
-#         "compress": compress,
-#     }
-#
-#     with rasterio.open(master_path, "w", **profile) as dst:
-#         blank = np.full((height, width), nodata, dtype=np.dtype(dtype))
-#         dst.write(blank, 1)
-#
-#     print(f"→ Master grid written to {master_path}")
-
-
 def merge_rasters(input_paths: list[str], output_path: str) -> None:
     """
     Merge multiple GeoTIFFs into a single continuous raster, ensuring matching CRS, resolution, compression, and dtype (to minimize output size).
@@ -427,10 +340,13 @@ def merge_rasters(input_paths: list[str], output_path: str) -> None:
             src.close()
 
 
-def resolve_cfg_path(cfg: DictConfig, dotted: str) -> Optional[str]:
+def resolve_cfg_path(cfg: DictConfig, dotted: str) -> str | None:
     """
-    Resolve a dotted-string path (e.g., "data_sources.base_pattern_precip") in cfg.
-    Returns None if not found.
+    Resolve a dotted-string path (e.g., "data_sources.base_pattern_precip") in cfg.Returns None if not found.
+
+    :param cfg: configuration file that includes the data_sources paths
+    :param dotted: dotted path
+    :return: cured path
     """
     cur = cfg
     for part in dotted.split("."):
@@ -439,11 +355,12 @@ def resolve_cfg_path(cfg: DictConfig, dotted: str) -> Optional[str]:
         cur = cur[part]
     return str(cur)
 
-if __name__ == "__main__":
-    merge_rasters(
-        input_paths=[
-            r"/Users/farshidrahmani/Dataset/F1_MODIS_USA/DFO_3625_From_20100310_to_20100324/DFO_3625_From_20100310_to_201003240000000000-0000014848.tif",
-            r"/Users/farshidrahmani/Dataset/F1_MODIS_USA/DFO_3625_From_20100310_to_20100324/DFO_3625_From_20100310_to_201003240000000000-0000000000.tif",
-        ],
-        output_path=r"/Users/farshidrahmani/Dataset/F1_MODIS_USA/DFO_3625_From_20100310_to_20100324/DFO_3625_From_20100310_to_20100324_merged.tif",
-    )
+
+# if __name__ == "__main__":
+#     merge_rasters(
+#         input_paths=[
+#             r"/Users/farshidrahmani/Dataset/F1_MODIS_USA/DFO_3625_From_20100310_to_20100324/DFO_3625_From_20100310_to_201003240000000000-0000014848.tif",
+#             r"/Users/farshidrahmani/Dataset/F1_MODIS_USA/DFO_3625_From_20100310_to_20100324/DFO_3625_From_20100310_to_201003240000000000-0000000000.tif",
+#         ],
+#         output_path=r"/Users/farshidrahmani/Dataset/F1_MODIS_USA/DFO_3625_From_20100310_to_20100324/DFO_3625_From_20100310_to_20100324_merged.tif",
+#     )

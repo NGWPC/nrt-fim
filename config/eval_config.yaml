@@ -1,8 +1,8 @@
 
 eval:
   batch_size: 1
-  run_dir: "/Users/farshidrahmani/GitHub/f1-trainer/scripts/runs/0.1.0-f1-mvp/2025-08-25_23-33-29"          # ← override on CLI to a specific training run dir
-  ckpt: "/Users/farshidrahmani/GitHub/f1-trainer/scripts/runs/0.1.0-f1-mvp/2025-08-25_23-33-29/saved_models/_0.1.0-f1-mvp_epoch_10.pt"    # ← optional: path to a specific checkpoint; if None we pick one
+  run_dir: "/Users/farshidrahmani/GitHub/f1-trainer/scripts/runs/0.1.0-f1-mvp/2025-09-03_15-44-13"          # ← override on CLI to a specific training run dir
+  ckpt: "/Users/farshidrahmani/GitHub/f1-trainer/scripts/runs/0.1.0-f1-mvp/2025-09-03_15-44-13/saved_models/_0.1.0-f1-mvp_epoch_1.pt"    # ← optional: path to a specific checkpoint; if None we pick one
   output_subdir: eval_${now:%Y-%m-%d_%H-%M-%S}
   num_workers: 0
 #  full_image_eval: False    # it forward runs the full target image into nn. It needs a huge memory though. so it is commented for now

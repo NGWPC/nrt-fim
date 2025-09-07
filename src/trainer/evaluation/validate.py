@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import xarray as xr
 import rioxarray
+import torch.nn.functional as F
 from rasterio.transform import Affine
 from rasterio.crs import CRS
 from typing import Tuple, Optional
@@ -415,7 +416,7 @@ def forward_full_image_tiled(
                 if start_hourly_idx is None or end_hourly_idx is None:
                     raise ValueError("Hourly features requested but hourly time index could not be determined.")
                 for name in ds.features_hourly:
-                    da = ds._dyn_vars[name]           # xr.DataArray (time,y,x) on NWM grid
+                    da = ds.inputs_dict["dyn_vars"][name]           # xr.DataArray (time,y,x) on NWM grid
                     patch = ds._extract_patch_time_and_space(  # -> np.ndarray (t, h, w) on master grid
                         da, master_tile, start_hourly_idx, end_hourly_idx
                     )
@@ -428,12 +429,13 @@ def forward_full_image_tiled(
                 if start_3hr_idx is None or end_3hr_idx is None:
                     raise ValueError("Three-hourly features requested but 3-hour time index could not be determined.")
                 for name in ds.features_threeh:
-                    da = ds._dyn_vars[name]
+                    da = ds.inputs_dict["dyn_vars"][name]
                     patch = ds._extract_patch_time_and_space(
                         da, master_tile, start_3hr_idx, end_3hr_idx
                     )
-                    stats_key = VAR_NAME_MAP[name].get("stats_key") or getattr(da, "name", name)
-                    patch = normalize_min_max(patch, ds.input_stats[stats_key], fix_nan_with="mean")
+                    stats_key = VAR_NAME_MAP[name].get("stats_key", None)
+                    if stats_key  in ds.input_stats:
+                        patch = normalize_min_max(patch, ds.input_stats[stats_key], fix_nan_with="mean")
                     inputs_vars.append(patch)
 
             # ---- statics (selected) ----
@@ -444,7 +446,7 @@ def forward_full_image_tiled(
                     continue
                 sda = ds._open_static_da(path, name=name)  # xr.DataArray (y,x) with its own CRS
                 spatch = ds._extract_static_patch_space(sda, master_tile)  # -> np.ndarray (h,w) on master grid
-                stats_key = VAR_NAME_MAP[name].get("stats_key", name)
+                stats_key = VAR_NAME_MAP[name].get("stats_key", None)
                 if stats_key in ds.input_stats:
                     spatch = normalize_min_max(spatch, ds.input_stats[stats_key], fix_nan_with="mean")
                 else:

@@ -1,21 +1,21 @@
 from __future__ import annotations
-import hydra
+
 import glob
+import json
 import logging
 import os
 import shutil
-import json
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
+
+import hydra
 import rasterio
-from rasterio.crs import CRS
 from omegaconf import DictConfig
+from rasterio.crs import CRS
 
-from trainer.data_prep.read_inputs import read_selected_inputs
 from trainer.data_prep.flood_percent_raster import generate_flood_percent
-from trainer.utils.geo_utils import _ensure_master_grid
-from trainer.utils.geo_utils import filter_modis_paths, compute_modis_overlap_bboxes
-
+from trainer.data_prep.read_inputs import read_selected_inputs
+from trainer.utils.geo_utils import _ensure_master_grid, compute_modis_overlap_bboxes, filter_modis_paths
 
 log = logging.getLogger(__name__)
 
@@ -74,11 +74,12 @@ def preprocess_modis_batch(
     cfg: DictConfig,
     raw_paths: Iterable[str],
     grid: str | None = None,
-    cleanup_temp: bool = True,   # delete *_crs4326.tif after success
+    cleanup_temp: bool = True,  # delete *_crs4326.tif after success
     assign_in_place: bool = False,  # set True to modify raws directly
 ) -> list[str]:
     """
     For each raw MODIS TIFF, ensure CRS (assign EPSG:4326 if missing), then
+
     generate a flood-percent raster by invoking the click command.
 
     Returns the list of produced output paths.
@@ -90,7 +91,7 @@ def preprocess_modis_batch(
     for raw_input in raw_paths:
         # 0) Ensure CRS on the raw file
         input_to_use = _ensure_crs_if_missing(raw_input, default_epsg="EPSG:4326", in_place=assign_in_place)
-        temp_created = (input_to_use != str(raw_input))
+        temp_created = input_to_use != str(raw_input)
 
         # 1) Compute output path (same layout you had)
         file_name = Path(raw_input).name
@@ -134,12 +135,13 @@ def preprocess_modis_batch(
             if temp_created and cleanup_temp:
                 try:
                     Path(input_to_use).unlink(missing_ok=True)
-                except Exception as ce:
+                except PermissionError as ce:
                     log.warning(f"Could not remove temp file {input_to_use}: {ce}")
 
         log.info(f"[done] {output_path}")
 
     return out_paths
+
 
 @hydra.main(
     version_base="1.3",
@@ -147,6 +149,12 @@ def preprocess_modis_batch(
     config_name="training_config",
 )
 def main(cfg: DictConfig):
+    """
+    Reading inputs dictionary, compute bounds, crs, master grid, and process satellite images and convert them all to master grid
+
+    :param cfg: configuration file
+    :return: None. saves the processed images in a predefined path
+    """
     # 1) Discover raw targets
     raw_paths = _discover_raw_modis(cfg)
     log.info(f"Discovered {len(raw_paths)} raw MODIS TIFFs")
@@ -164,12 +172,8 @@ def main(cfg: DictConfig):
     # 'bounds_per_feature': list of bound per feature based on reference coordinate system (input_crs),
     # 'union_bounds': The minimum bound of all bounds pre feature. --> the reference bound
     # ─────────────────────────────────────────────────────────────
-    inputs_dict = read_selected_inputs(
-        cfg=cfg,
-        compute_bounds=True
-    )
+    inputs_dict = read_selected_inputs(cfg=cfg, compute_bounds=True)
     ref_crs = inputs_dict["input_crs"]
-    ref_bounds = inputs_dict["union_bounds"]
 
     # For bbox computation we need a CRS on every file;
     # create temporary CRS-assigned copies where missing.
@@ -184,11 +188,9 @@ def main(cfg: DictConfig):
         if ensured != str(p):
             temp_bbox_files.append(Path(ensured))
 
-    # bboxes = compute_modis_bboxes(paths_for_bbox, input_crs=ref_crs, bounds=ref_bounds)
-    bboxes = compute_modis_overlap_bboxes(paths=paths_for_bbox,
-                                          input_crs=ref_crs,
-                                          conus_shp_gpkg_path=cfg["data_sources"]["conus_geom"]
-                                          )
+    bboxes = compute_modis_overlap_bboxes(
+        paths=paths_for_bbox, input_crs=ref_crs, conus_shp_gpkg_path=cfg["data_sources"]["conus_geom"]
+    )
     kept_for_bbox = filter_modis_paths(paths_for_bbox, bboxes)
     kept_raw_paths = [mapping_bbox_to_raw[k] for k in kept_for_bbox]
 
@@ -196,7 +198,7 @@ def main(cfg: DictConfig):
     for t in temp_bbox_files:
         try:
             t.unlink(missing_ok=True)
-        except Exception as e:
+        except PermissionError as e:
             log.warning(f"Could not remove temp bbox file {t}: {e}")
 
     log.info(f"Filtered to {len(kept_raw_paths)} files within CONUS bounds")

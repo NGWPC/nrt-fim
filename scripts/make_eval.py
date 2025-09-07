@@ -6,12 +6,18 @@ import rioxarray
 from pathlib import Path
 from omegaconf import DictConfig, OmegaConf
 
-from trainer.evaluation.validate import load_model_from_checkpoint, forward_full_image_tiled
+from trainer.evaluation.validate import _pick_checkpoint, load_model_from_checkpoint, forward_full_image_tiled
 from trainer.datamodules.flood_datamodule import FloodDataModule
 from trainer.utils.utils import save_array_as_gtiff
 from trainer.utils.normalization_methods import denormalize_min_max
 
 log = logging.getLogger(__name__)
+# Quiet only the credential chatter
+logging.getLogger("botocore.credentials").setLevel(logging.WARNING)
+# also quiet broader AWS libs
+for name in ("botocore", "boto3", "s3transfer", "s3fs", "fsspec"):
+    logging.getLogger(name).setLevel(logging.WARNING)
+
 
 
 
@@ -61,7 +67,7 @@ def main(cfg: DictConfig) -> None:
                 float(eval_loader.dataset.flood_instances.iloc[idx]["bottom"]),
                 float(eval_loader.dataset.flood_instances.iloc[idx]["right"]),
                 float(eval_loader.dataset.flood_instances.iloc[idx]["top"])
-            ),   # in master CRS
+            ),   # in master CRS. it can be any bound that the user wants
             end_time=eval_loader.dataset.flood_instances.iloc[idx]["end_time"],     #or any time that the user wants
             tile_h = int(cfg.eval.No_pixels_y),  # or cfg.train.No_pixels_y
             tile_w = int(cfg.eval.No_pixels_x),  # or cfg.train.No_pixels_x
@@ -73,14 +79,13 @@ def main(cfg: DictConfig) -> None:
         tstats = eval_loader.dataset.target_stats.get("band_1", None)
         if tstats is not None:
             pred_to_save = denormalize_min_max(pred,
-                                               tstats,
-                                               fix_nan_with=train_cfg["normalization"]["fix_nan_with_obs"])
+                                               tstats)
         else:
             # fallback: save normalized if stats missing
             pred_to_save = pred
 
         # decide CRS fallback (if reference lacks CRS)
-        master_grid = rioxarray.open_dataset(eval_loader.dataset.master_path)
+        master_grid = rioxarray.open_rasterio(eval_loader.dataset.master_path)
         master_crs = master_grid.rio.crs
 
         ref_path = eval_loader.dataset.flood_instances.iloc[idx]["tif_path"]

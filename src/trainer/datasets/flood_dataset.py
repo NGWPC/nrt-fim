@@ -16,7 +16,7 @@ from omegaconf import DictConfig, OmegaConf
 from rasterio.enums import Resampling
 from rasterio.warp import transform_bounds
 
-from trainer.utils.geo_utils import infer_crs
+from trainer.utils.geo_utils import infer_crs, _ensure_master_grid
 from trainer.utils.normalization_methods import normalize_min_max
 from trainer.data_prep.read_inputs import read_selected_inputs
 # from trainer.utils.utils import create_master_from_da  # your existing util
@@ -40,7 +40,7 @@ class FloodDataset(Dataset):
 
         # index + split
         df = pd.read_csv(cfg.data_sources.index_csv)
-        flood_img_paths = Path(cfg.data_sources.splits_dir, f"{split}.json")
+        flood_img_paths = Path(cfg.data_sources.splits_dir, f"{self.split}.json")
         with open(flood_img_paths, "r") as f:
             flood_ids = json.load(f)
         use_ids = sorted(list(int(s) for s in flood_ids if s.strip()))
@@ -50,8 +50,10 @@ class FloodDataset(Dataset):
         self._interpret_requested_features()
 
         # ---------------- read/prepare inputs (ALL input reading consolidated here) ----------------
-        # self._read_inputs()
         self.inputs_dict = read_selected_inputs(cfg)
+
+        # ---------------- read master_grid path ---------------------------------------------------
+        self.master_path = _ensure_master_grid(self.cfg, self.inputs_dict)
 
         # Capture hourly time and three-hourly time
         if len(self.features_hourly) > 0:
@@ -70,65 +72,6 @@ class FloodDataset(Dataset):
         with open(target_stats_path) as f:
             self.target_stats = json.load(f)
 
-    # ────────────────────────────────────────────────────────────────
-    # The single place where inputs are opened/prepared
-    # ────────────────────────────────────────────────────────────────
-    def _read_inputs(self) -> None:
-        """
-        Open only the dynamic Zarr stores needed, construct per-feature DataArrays,
-
-        infer CRS/time axes, and (optionally) ensure a master grid.
-        Static rasters are not opened here (done per-sample).
-        """
-        self._dyn_ds: Dict[str, xr.Dataset] = {}
-        self._dyn_vars: Dict[str, xr.DataArray] = {}
-        self.input_crs: Optional[str] = None
-        self.hourly_time = None
-        self.three_hourly_time = None
-
-        # which Zarr stores do we need?
-        needed_store_keys = {
-            VAR_NAME_MAP[n]["store"]
-            for n in (self.features_hourly + self.features_threeh)
-        }
-
-        if needed_store_keys:
-            so = {"anon": True, "default_fill_cache": False, "default_cache_type": "none"}
-            for store_key in needed_store_keys:
-                url = self._resolve_cfg_path(self.cfg, store_key)
-                if url is None:
-                    raise KeyError(f"Missing cfg path for store: {store_key}")
-                # open once per store
-                self._dyn_ds[store_key] = xr.open_dataset(
-                    url, backend_kwargs={"storage_options": so}, engine="zarr", chunked_array_type="cubed"
-                )
-
-            # infer CRS from first opened dynamic dataset
-            # (falls back to EPSG:4326 if needed)
-            first_ds = next(iter(self._dyn_ds.values()))
-            try:
-                self.input_crs = infer_crs(first_ds)
-            except Exception:
-                self.input_crs = "EPSG:4326"
-
-            # materialize the named DataArrays we need & capture time axes
-            for name in (self.features_hourly + self.features_threeh):
-                da = self._resolve_dynamic_da(name)  # renames to stats_key
-                self._dyn_vars[name] = da
-                if ("time" in da.dims) and (name in self.features_hourly) and (len(self.hourly_time) > 0):
-                    self.hourly_time = da["time"].values
-                if ("time" in da.dims) and (name in self.features_threeh) and (len(self.three_hourly_time) > 0):
-                    self.three_hourly_time = da["time"].values
-
-        # ensure a master grid if your pipeline depends on it (optional)
-        # Here we try to base it on any dynamic array; if no dynamics, skip.
-        master_path = Path(self.cfg.master_grids_dir) / f"master_{self.cfg.params.resolution}m.tif"
-        master_path.parent.mkdir(parents=True, exist_ok=True)
-        if not master_path.exists() and self._dyn_vars:
-            any_da = next(iter(self._dyn_vars.values()))
-            create_master_from_da(any_da, str(master_path), resolution=self.cfg.params.resolution)
-        self.master_path = master_path
-
     def __len__(self):
         return len(self.flood_instances)
 
@@ -137,7 +80,7 @@ class FloodDataset(Dataset):
         tif_path = r["tif_path"]
         end_time = np.datetime64(r["end_time"]) if pd.notnull(r["end_time"]) else None
 
-        # ── build target (your current convention uses band 0 only) ──
+        # ── build target (your current convention uses band 0 only) ──:wq!
         sat = rioxarray.open_rasterio(tif_path)
         sat_water = sat[0]
         flood0 = sat_water
