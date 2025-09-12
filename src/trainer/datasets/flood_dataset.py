@@ -1,8 +1,9 @@
 from __future__ import annotations
-import logging
+
 import json
+import logging
 from pathlib import Path
-from typing import Literal, Dict, Optional
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -10,18 +11,21 @@ import rioxarray
 import torch
 import torch.nn.functional as F
 import xarray as xr
-from torch.utils.data import Dataset
-
 from omegaconf import DictConfig, OmegaConf
 from rasterio.enums import Resampling
 from rasterio.warp import transform_bounds
+from rioxarray.exceptions import MissingCRS, NoDataInBounds
+from torch.utils.data import Dataset
 
-from trainer.utils.geo_utils import infer_crs, _ensure_master_grid
-from trainer.utils.normalization_methods import normalize_min_max
 from trainer.data_prep.read_inputs import read_selected_inputs
+
 # from trainer.utils.utils import create_master_from_da  # your existing util
 from trainer.datasets.registry import VAR_NAME_MAP
+from trainer.utils.geo_utils import _ensure_master_grid
+from trainer.utils.normalization_methods import normalize_min_max
+
 log = logging.getLogger(__name__)
+
 
 class FloodDataset(Dataset):
     """
@@ -32,19 +36,22 @@ class FloodDataset(Dataset):
       - builds inputs by slicing + reprojecting on the fly (can be moved offline later)
     """
 
-    def __init__(self, cfg: DictConfig, split: Literal["train", "eval"]="train"):
+    def __init__(self, cfg: DictConfig, split: Literal["train", "eval", "user_defined"] = "train"):
         self.cfg = cfg
         self.split = split
 
         self.full_image_eval = False  # this is for evaluation part to forward run with full image size
 
         # index + split
-        df = pd.read_csv(cfg.data_sources.index_csv)
-        flood_img_paths = Path(cfg.data_sources.splits_dir, f"{self.split}.json")
-        with open(flood_img_paths, "r") as f:
-            flood_ids = json.load(f)
-        use_ids = sorted(list(int(s) for s in flood_ids if s.strip()))
-        self.flood_instances = df[df.flood_id.isin(use_ids)].reset_index(drop=True)
+        if self.split in ["train", "eval"]:
+            df = pd.read_csv(cfg.data_sources.index_csv)
+            flood_img_paths = Path(cfg.data_sources.splits_dir, f"{self.split}.json")
+            with open(flood_img_paths) as f:
+                flood_ids = json.load(f)
+            use_ids = sorted(int(s) for s in flood_ids if s.strip())
+            self.flood_instances = df[df.flood_id.isin(use_ids)].reset_index(drop=True)
+        # else:   # == user_define
+        #     self.flood_instances =
 
         # ---------------- interpreting requested features to check if they are available ----------------
         self._interpret_requested_features()
@@ -62,12 +69,16 @@ class FloodDataset(Dataset):
             self.three_hourly_time = np.asarray(self.inputs_dict["dyn_vars"][self.features_threeh[0]]["time"])
 
         # ---------------- read/prepare stats ----------------
-        input_file_name = "input_stats" + "_" + str(cfg.train.start_time) + "_" + str(cfg.train.end_time) + ".json"
+        input_file_name = (
+            "input_stats" + "_" + str(cfg.train.start_time) + "_" + str(cfg.train.end_time) + ".json"
+        )
         input_stats_path = Path(self.cfg.project_root) / "statistics" / input_file_name
         with open(input_stats_path) as f:
             self.input_stats = json.load(f)
 
-        target_file_name = "target_stats" + "_" + str(cfg.train.start_time) + "_" + str(cfg.train.end_time) + ".json"
+        target_file_name = (
+            "target_stats" + "_" + str(cfg.train.start_time) + "_" + str(cfg.train.end_time) + ".json"
+        )
         target_stats_path = Path(self.cfg.project_root) / "statistics" / target_file_name
         with open(target_stats_path) as f:
             self.target_stats = json.load(f)
@@ -84,16 +95,20 @@ class FloodDataset(Dataset):
         sat = rioxarray.open_rasterio(tif_path)
         sat_water = sat[0]
         flood0 = sat_water
-        flood = flood0.where(flood0 > 0, 0)   # a xarray.where function. different from np.where
+        flood = flood0.where(flood0 > 0, 0)  # a xarray.where function. different from np.where
 
         # ── sample spatial window ──
-        flood_patch = self.spatial_sampling(image=flood,
-                                       full_image_eval=self.full_image_eval,)
+        flood_patch = self.spatial_sampling(
+            image=flood,
+            full_image_eval=self.full_image_eval,
+        )
 
         # normalize target
-        flood_patch_norm = normalize_min_max(flood_patch,
-                                             self.target_stats["band_1"],
-                                             fix_nan_with=self.cfg["normalization"]["fix_nan_with_obs"])
+        flood_patch_norm = normalize_min_max(
+            flood_patch,
+            self.target_stats["band_1"],
+            fix_nan_with=self.cfg["normalization"]["fix_nan_with_obs"],
+        )
 
         # ── temporal windows per group ──
         rho = int(self.cfg.train.rho)
@@ -106,7 +121,11 @@ class FloodDataset(Dataset):
             start_hourly_idx = end_hourly_idx - t_hourly
 
         start_3hr_idx = end_3hr_idx = None
-        if (len(self.features_threeh) > 0) and (self.three_hourly_time is not None) and (end_time is not None):
+        if (
+            (len(self.features_threeh) > 0)
+            and (self.three_hourly_time is not None)
+            and (end_time is not None)
+        ):
             end_3hr_idx = int(np.argmin(np.abs(self.three_hourly_time - end_time)))
             start_3hr_idx = end_3hr_idx - t_3hr
 
@@ -116,12 +135,16 @@ class FloodDataset(Dataset):
         if start_hourly_idx is not None and end_hourly_idx is not None:
             for name in self.features_hourly:
                 da = self.inputs_dict["dyn_vars"][name]
-                patch = self._extract_patch_time_and_space(da, flood_patch_norm, start_hourly_idx, end_hourly_idx)
+                patch = self._extract_patch_time_and_space(
+                    da, flood_patch_norm, start_hourly_idx, end_hourly_idx
+                )
                 stats_key = VAR_NAME_MAP[name].get("stats_key") or da.name
                 if stats_key in self.input_stats:
-                    patch = normalize_min_max(patch,
-                                              self.input_stats[stats_key],
-                                              fix_nan_with=self.cfg["normalization"]["fix_nan_with_dyn_inp"])
+                    patch = normalize_min_max(
+                        patch,
+                        self.input_stats[stats_key],
+                        fix_nan_with=self.cfg["normalization"]["fix_nan_with_dyn_inp"],
+                    )
                 else:
                     patch = np.nan_to_num(patch, nan=0.0)
                 inputs_vars.append(patch)
@@ -135,9 +158,11 @@ class FloodDataset(Dataset):
                 patch = self._extract_patch_time_and_space(da, flood_patch_norm, start_3hr_idx, end_3hr_idx)
                 stats_key = VAR_NAME_MAP[name].get("stats_key") or da.name
                 if stats_key in self.input_stats:
-                    patch = normalize_min_max(patch,
-                                              self.input_stats[stats_key],
-                                              fix_nan_with=self.cfg["normalization"]["fix_nan_with_dyn_inp"])
+                    patch = normalize_min_max(
+                        patch,
+                        self.input_stats[stats_key],
+                        fix_nan_with=self.cfg["normalization"]["fix_nan_with_dyn_inp"],
+                    )
                 else:
                     patch = np.nan_to_num(patch, nan=0.0)
                 inputs_vars.append(patch)
@@ -163,9 +188,11 @@ class FloodDataset(Dataset):
             spatch = self._extract_static_patch_space(sda, flood_patch_norm)  # (h, w)
             stats_key = VAR_NAME_MAP[name].get("stats_key", name)
             if stats_key in self.input_stats:
-                spatch = normalize_min_max(spatch,
-                                           self.input_stats[stats_key],
-                                           fix_nan_with=self.cfg["normalization"]["fix_nan_with_static_inp"])
+                spatch = normalize_min_max(
+                    spatch,
+                    self.input_stats[stats_key],
+                    fix_nan_with=self.cfg["normalization"]["fix_nan_with_static_inp"],
+                )
             else:
                 spatch = np.nan_to_num(spatch, nan=0.0)
             inputs_vars.append(spatch[np.newaxis, ...])  # (1, h, w)
@@ -184,8 +211,8 @@ class FloodDataset(Dataset):
         self,
         da: xr.DataArray,
         master_patch: xr.DataArray,
-        start_idx: Optional[int],
-        end_idx: Optional[int],
+        start_idx: int | None,
+        end_idx: int | None,
     ) -> np.ndarray:
         """
         Extract a spatio‐temporal patch:
@@ -204,20 +231,19 @@ class FloodDataset(Dataset):
 
         mp_crs = master_patch.rio.crs
         minx, miny, maxx, maxy = master_patch.rio.bounds()
-        bx_minx, bx_miny, bx_maxx, bx_maxy = transform_bounds(mp_crs, self.inputs_dict["input_crs"], minx, miny, maxx, maxy)
+        bx_minx, bx_miny, bx_maxx, bx_maxy = transform_bounds(
+            mp_crs, self.inputs_dict["input_crs"], minx, miny, maxx, maxy
+        )
 
-        clipped = temp.rio.clip_box(minx=bx_minx, miny=bx_miny, maxx=bx_maxx, maxy=bx_maxy, crs=self.inputs_dict["input_crs"])
+        clipped = temp.rio.clip_box(
+            minx=bx_minx, miny=bx_miny, maxx=bx_maxx, maxy=bx_maxy, crs=self.inputs_dict["input_crs"]
+        )
         matched = clipped.rio.reproject_match(master_patch, resampling=Resampling.bilinear)
         return matched.values
 
-
-    def _pad_to_multiple_32(
-            self,
-            input_tensor: torch.Tensor,
-            target_tensor: torch.Tensor
-    ) -> torch.Tensor:
+    def _pad_to_multiple_32(self, input_tensor: torch.Tensor, target_tensor: torch.Tensor) -> torch.Tensor:
         """
-        padding to the extent of max x and y sizes defined in cfg
+        Padding to the extent of max x and y sizes defined in cfg
 
         :param input_tensor: inputs
         :param target_tensor:
@@ -246,9 +272,9 @@ class FloodDataset(Dataset):
 
     def _interpret_requested_features(self):
         feats = getattr(self.cfg, "features", None)
-        self.features_hourly = sorted(list(getattr(feats, "hourly", []) or []))
-        self.features_threeh = sorted(list(getattr(feats, "three_hourly", []) or []))
-        self.features_static = sorted(list(getattr(feats, "static", []) or []))
+        self.features_hourly = sorted(getattr(feats, "hourly", []) or [])
+        self.features_threeh = sorted(getattr(feats, "three_hourly", []) or [])
+        self.features_static = sorted(getattr(feats, "static", []) or [])
 
         self.features_hourly = self._filter_known(self.features_hourly, "hourly")
         self.features_threeh = self._filter_known(self.features_threeh, "three_hourly")
@@ -274,7 +300,7 @@ class FloodDataset(Dataset):
             log.warning(f"[features] Unknown/incorrect {group} features skipped: {unknown}")
         return known
 
-    def _resolve_cfg_path(self, cfg: DictConfig, dotted: str) -> Optional[str]:
+    def _resolve_cfg_path(self, cfg: DictConfig, dotted: str) -> str | None:
         key = dotted[4:] if dotted.startswith("cfg.") else dotted
         return OmegaConf.select(cfg, key)
 
@@ -300,7 +326,7 @@ class FloodDataset(Dataset):
 
     def _extract_static_patch_space(self, arr2d: xr.DataArray, master_patch: xr.DataArray) -> np.ndarray:
         """
-        extract static patch space
+        Extract static patch space
 
         Safely align a static raster to the master_patch grid.
         - If there is spatial overlap: clip (fast) then reproject.
@@ -324,7 +350,9 @@ class FloodDataset(Dataset):
 
         try:
             # transform master bounds into arr2d CRS
-            bx_minx, bx_miny, bx_maxx, bx_maxy = transform_bounds(mp_crs, arr2d.rio.crs, minx, miny, maxx, maxy)
+            bx_minx, bx_miny, bx_maxx, bx_maxy = transform_bounds(
+                mp_crs, arr2d.rio.crs, minx, miny, maxx, maxy
+            )
             ax_min, ay_min, ax_max, ay_max = arr2d.rio.bounds()
 
             # check intersection before clipping
@@ -335,7 +363,7 @@ class FloodDataset(Dataset):
                 )
                 matched = clipped.rio.reproject_match(master_patch, resampling=resampling)
                 return matched.values
-        except Exception as e:
+        except (NoDataInBounds, MissingCRS) as e:
             # fall back if transform/clip fails for any reason
             log.debug(f"[static] clip_box fallback ({name}): {e}")
 
@@ -343,11 +371,13 @@ class FloodDataset(Dataset):
         matched = arr2d.rio.reproject_match(master_patch, resampling=resampling)
         return matched.values
 
-    def spatial_sampling(self,
-                         image: xr.DataArray,
-                         full_image_eval: bool = False,):
+    def spatial_sampling(
+        self,
+        image: xr.DataArray,
+        full_image_eval: bool = False,
+    ):
         """
-        spatial sampling from a large image/tif xarray file
+        Spatial sampling from a large image/tif xarray file
 
         :param image: the image that a sample will be taken from
         :param full_image_eval: True means the whole image will be taken as one single sample
@@ -356,7 +386,7 @@ class FloodDataset(Dataset):
         H, W = int(image.sizes["y"]), int(image.sizes["x"])
         want_h, want_w = int(self.cfg.train.No_pixels_y), int(self.cfg.train.No_pixels_x)
 
-        if full_image_eval == True:
+        if full_image_eval:
             y0, x0 = 0, 0
             crop_h, crop_w = H, W
         else:
@@ -369,9 +399,3 @@ class FloodDataset(Dataset):
         y1, x1 = y0 + crop_h, x0 + crop_w
         flood_patch = image.isel(y=slice(y0, y1), x=slice(x0, x1))
         return flood_patch
-
-
-
-
-
-
