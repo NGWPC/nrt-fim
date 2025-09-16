@@ -180,3 +180,6 @@ runs/
 examples/data
 
 uv.lock
+
+*.tif
+*.tif.aux.xml
