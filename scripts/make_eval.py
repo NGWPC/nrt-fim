@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-
+import datetime
 import hydra
 import pandas as pd
 import rioxarray
@@ -31,7 +31,7 @@ def main(cfg: DictConfig) -> None:
     """
     forward-runs on requested dataset based on what mentioned in eval_config
 
-    :param cfg: configuration file for evaluation (different from congiuration used for training the model
+    :param cfg: configuration file for evaluation (different from configuration used for training the model
     :return: None, saves the outputs into tif files
     """
     run_dir = Path(cfg.eval.run_dir or "")
@@ -119,10 +119,16 @@ def main(cfg: DictConfig) -> None:
         master_grid = rioxarray.open_rasterio(eval_loader.dataset.master_path)
         master_crs = master_grid.rio.crs
         if Path(eval_loader.dataset.flood_instances.iloc[idx]["tif_path"]).exists():
+            # UTC timestamp
+            ts = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
             ref_path = eval_loader.dataset.flood_instances.iloc[idx]["tif_path"]
-            file_name = "pred_" + str(Path(ref_path).name)
+            ref_path = str(Path(ref_path).name)   # has .tif
+            file_name = f"pred_{ts}_{ref_path}"
         else:
-            file_name = "pred_" + str(eval_loader.dataset.flood_instances.iloc[idx]["flood_id"]) + ".tif"
+            # UTC timestamp
+            ts = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
+            f_id = str(eval_loader.dataset.flood_instances.iloc[idx]["flood_id"])
+            file_name = f"pred_{ts}_{f_id}.tif"
         out_path = Path(cfg.eval.run_dir) / "preds" / file_name
         out_path.parent.mkdir(parents=True, exist_ok=True)
         # saving the prediction into Tiff file with appropriate crs
@@ -135,3 +141,4 @@ def main(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     main()
+

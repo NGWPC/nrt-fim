@@ -29,19 +29,19 @@ VAR_NAME_MAP: Dict[str, Dict[str, Any]] = {
         "store": "data_sources.base_pattern_precip",
         "var": "RAINRATE",
         "group": "hourly",
-        "stats_key": "RAINRATE",
+        "stats_key": "precip",
     },
     "air_temp": {
         "store": "data_sources.base_pattern_air_temp",
         "var": "T2D",
         "group": "hourly",
-        "stats_key": "T2D",
+        "stats_key": "air_temp",
     },
     "solar_shortwave": {
         "store": "data_sources.base_pattern_solar_shortwave",
         "var": "SWDOWN",
         "group": "hourly",
-        "stats_key": "SWDOWN",
+        "stats_key": "solar_shortwave",
     },
 
     # three-hourly dynamics (chrtout, LDAS)
