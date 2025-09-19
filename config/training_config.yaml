@@ -4,8 +4,8 @@ defaults:
 
 version: 0.1.0
 name: ${version}-f1-mvp
-project_root: "/efs/edfs-deliveries/pi_7/subcase_1_CNN/f1-trainer"    # absolute path of root directory --> saves many lines of codes
-
+project_root: "/Users/farshidrahmani/GitHub/f1-trainer"    # absolute path of root directory --> saves many lines of codes
+forecast_data_source: False  # False means retrospective data will be used, True means Forecast Data
 data_sources:
   ## Dynamic inputs paths
   base_pattern_routing: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/rtout.zarr/"
@@ -15,30 +15,30 @@ data_sources:
   base_pattern_solar_shortwave: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/forcing/swdown.zarr"
   ##
   # static inputs paths
-  flow_accumulation: "/efs/edfs-data/pi_7/nrt_cnn//Dataset/flow_accu/flow_accumulation.tiff"
-  flow_direction: "/efs/edfs-data/pi_7/nrt_cnn/Dataset/flow_dir/flow_direction.tiff"
-  irrigation: "/efs/edfs-data/pi_7/nrt_cnn/Dataset/irrig/irrigation_2015_2024_f1.tiff"
-  surface_extent: "/efs/edfs-data/pi_7/nrt_cnn/Dataset/surf_ext/surface_extent.tiff"
-  ##
+  flow_accumulation: "/Users/farshidrahmani/Dataset/flow_accu/flow_accumulation.tiff"
+  flow_direction: "/Users/farshidrahmani/Dataset/flow_dir/flow_direction.tiff"
+  irrigation: "/Users/farshidrahmani/Dataset/irrig/irrigation_2015_2024_f1.tiff"
+  surface_extent: "/Users/farshidrahmani/Dataset/surf_ext/surface_extent.tiff"
+    ##
   # observation path
-  dfo_modis_dir: "/efs/edfs-data/pi_7/nrt_cnn/Dataset/F1_MODIS_USA"
-  dfo_modis_dir_preprocessed: "/efs/edfs-data/pi_7/nrt_cnn/Dataset/F1_MODIS_USA_perc_regrid"
+  dfo_modis_dir: "/Users/farshidrahmani/Dataset/F1_MODIS_USA"
+  dfo_modis_dir_preprocessed: "/Users/farshidrahmani/Dataset/F1_MODIS_USA_perc_regrid"
   ##
   # training and testing paths. The path to save the train and test split index file
-  index_csv: "/efs/edfs-data/pi_7/nrt_cnn/Dataset/splits/index_csv.csv"
-  splits_dir: "/efs/edfs-data/pi_7/nrt_cnn/Dataset/splits/"
+  index_csv: "/Users/farshidrahmani/Dataset/splits/index_csv.csv"
+  splits_dir: "/Users/farshidrahmani/Dataset/splits/"
   ##
   # CONUS inland shape file to find satellite images that have intersection with it. Note that it is not a static input.
-  conus_geom: "/efs/edfs-data/pi_7/nrt_cnn/Dataset/conus_geom_fix/conus_geom_fix.gpkg"
+  conus_geom: "/Users/farshidrahmani/Dataset/conus_geom_fix/conus_geom_fix.gpkg"
 
 # This path contains the master grids that were created in pre-processing step
-master_grids_dir: "/efs/edfs-data/pi_7/nrt_cnn/Dataset/master_grids_dir"
+master_grids_dir: "/Users/farshidrahmani/Dataset/master_grids_dir"
 
 # Which features to include
 features:
-  hourly:        ["precip"] #, "air_temp", "solar_shortwave"]
-  three_hourly:  ["terrain_router", "soil_sm_layer1", "soil_sm_layer2", "soil_sm_layer3", "soil_sm_layer4", "SNOWH", "UGDRNOFF"]
-  static:        ["flow_accumulation", "flow_direction", "surface_extent", "irrigation"]
+  hourly:        [] #"precip"] #, "air_temp", "solar_shortwave"]
+  three_hourly:  ["terrain_router", "soil_sm_layer1"] #, "soil_sm_layer2", "soil_sm_layer3", "soil_sm_layer4", "SNOWH", "UGDRNOFF"]
+  static:        ["flow_accumulation", "flow_direction", "surface_extent" ] #, "irrigation"]
 
 params:
   save_path: ./
@@ -82,7 +82,7 @@ normalization:
 
 np_seed: 1
 seed: 0
-device: "cuda"
+device: "mps:0"
 
 hydra:
   sweep:
