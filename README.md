@@ -1,109 +1,62 @@
-#### OWP Open Source Project Template Instructions
+# f1_trainer
 
-1. Create a new project.
-2. [Copy these files into the new project](#installation)
-3. Update the README, replacing the contents below as prescribed.
-4. Add any libraries, assets, or hard dependencies whose source code will be included
-   in the project's repository to the _Exceptions_ section in the [TERMS](TERMS.md).
-  - If no exceptions are needed, remove that section from TERMS.
-5. If working with an existing code base, answer the questions on the [open source checklist](opensource-checklist.md)
-6. Delete these instructions and everything up to the _Project Title_ from the README.
-7. Write some great software and tell people about it.
+<p align="center">
+    <img src="docs/img/f1.png" alt="icefabric" width="25%"/>
+</p>
 
-> Keep the README fresh! It's the first thing people see and will make the initial impression.
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-## Installation
-
-To install all of the template files, run the following script from the root of your project's directory:
-
-```
-bash -c "$(curl -s https://raw.githubusercontent.com/NOAA-OWP/owp-open-source-project-template/open_source_template.sh)"
-```
-
-----
-
-# Project Title
-
-**Description**:  Put a meaningful, short, plain-language description of what
-this project is trying to accomplish and why it matters.
-Describe the problem(s) this project solves.
-Describe how this software can improve the lives of its audience.
-
-Other things to include:
-
-  - **Technology stack**: Indicate the technological nature of the software, including primary programming language(s) and whether the software is intended as standalone or as a module in a framework or other ecosystem.
-  - **Status**:  Alpha, Beta, 1.1, etc. It's OK to write a sentence, too. The goal is to let interested people know where this project is at. This is also a good place to link to the [CHANGELOG](CHANGELOG.md).
-  - **Links to production or demo instances**
-  - Describe what sets this apart from related-projects. Linking to another doc or page is OK if this can't be expressed in a sentence or two.
+A repo for the MVP NRT CNN Capability. This work builds on the prototype model trained on MODIS flood satellite images
 
 
-**Screenshot**: If the software has visual components, place a screenshot after the description; e.g.,
+Getting Started
 
-![](https://raw.githubusercontent.com/NOAA-OWP/owp-open-source-project-template/master/doc/Screenshot.png)
+This repo is managed through UV and can be installed through:
+uv venv .venv --python 3.12.0
+source .venv/bin/activate
+uv sync                 # installs everything from pyproject.toml
+uv pip install -e .      # editable install of your own package
 
+## Development
 
-## Dependencies
+To ensure that F1-trainer code changes follow the specified structure, be sure to install the local dev dependencies and run pre-commit install
 
-Describe any dependencies that must be installed for this software to work.
-This includes programming languages, databases or other storage mechanisms, build tools, frameworks, and so forth.
-If specific versions of other software are required, or known not to work, call that out.
+## Documentation
 
-## Installation
+To build the user guide documentation for F1-trainer locally, run the following commands:
 
-Detailed instructions on how to install, configure, and get the project running.
-This should be frequently tested to ensure reliability. Alternatively, link to
-a separate [INSTALL](INSTALL.md) document.
-
-## Configuration
-
-If the software is configurable, describe it in detail, either here or in other documentation to which you link.
-
-## Usage
-
-Show users how to use the software.
-Be specific.
-Use appropriate formatting when showing code snippets.
-
-## How to test the software
-
-If the software includes automated tests, detail how to run those tests.
-
-## Known issues
-
-Document any known significant shortcomings with the software.
-
-## Getting help
-
-Instruct users how to get help with this software; this might include links to an issue tracker, wiki, mailing list, etc.
-
-**Example**
-
-If you have questions, concerns, bug reports, etc, please file an issue in this repository's Issue Tracker.
-
-## Getting involved
-
-This section should detail why people should get involved and describe key areas you are
-currently focusing on; e.g., trying to get feedback on features, fixing certain bugs, building
-important pieces, etc.
-
-General instructions on _how_ to contribute should be stated with a link to [CONTRIBUTING](CONTRIBUTING.md).
+uv pip install ".[docs]"
+mkdocs serve -a localhost:8080
+Docs will be spun up at localhost:8080/
 
 
-----
+## How to run:
+### 1- Pre-processing the target data:
 
-## Open source licensing info
+    python -m scripts.data_prep.preprocess_modis_targets
 
-These links must be included in the final version of your project README (keep this section,
-as is, but remove this sentence):
+This will:
+discover raw MODIS TIFFs under ${data_sources.dfo_modis_dir}/DFO_* / *.tif,
+(optionally) create a master grid (from precip) and pass it via --grid,
+generate the flood-percent + regridded TIFFs (same folder layout you had),
+write a manifest file listing all produced outputs (default: data/indices/modis_preprocessed.txt).
 
-1. [TERMS](TERMS.md)
-2. [LICENSE](LICENSE)
+### 2- Build index:
 
+    python -m scripts.data_prep.make_index 
 
-----
+### 3- Write splits:
 
-## Credits and references
+    python -m scripts.data_prep.make_splits
 
-1. Projects that inspired you
-2. Related projects
-3. Books, papers, talks, or other sources that have meaningful impact or influence on this project
+### 4- Compute stats:
+
+    python -m scripts.data_prep.compute_stats
+
+### 5- Train:
+
+    python -m scripts.make_train
+
+### 6- Evaluation:
+
+    python -m scripts.make_eval
