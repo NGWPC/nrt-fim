@@ -1,0 +1,92 @@
+defaults:
+  - _self_
+  - hydra: settings
+
+version: 0.1.0
+name: ${version}-f1-mvp
+project_root: /Users/farshidrahmani/GitHub/f1-trainer    # absolute path of root directory --> saves many lines of codes
+
+data_sources:
+  ## Dynamic inputs paths
+  base_pattern_routing: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/rtout.zarr/"
+  base_pattern_ldas: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/ldasout.zarr/"
+  base_pattern_precip: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/forcing/precip.zarr"
+  base_pattern_air_temp: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/forcing/t2d.zarr"
+  base_pattern_solar_shortwave: "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/forcing/swdown.zarr"
+  ##
+  # static inputs paths
+  flow_accumulation: "/Users/farshidrahmani/Dataset/flow_accu/flow_accumulation.tiff"
+  flow_direction: "/Users/farshidrahmani/Dataset/flow_dir/flow_direction.tiff"
+  irrigation: "/Users/farshidrahmani/Dataset/irrig/irrigation_2015_2024_f1.tiff"
+  surface_extent: "/Users/farshidrahmani/Dataset/surf_ext/surface_extent.tiff"
+  ##
+  # observation path
+  dfo_modis_dir: "/Users/farshidrahmani/Dataset/F1_MODIS_USA"
+  dfo_modis_dir_preprocessed: "/Users/farshidrahmani/Dataset/F1_MODIS_USA_perc_regrid"
+  ##
+  # training and testing paths. The path to save the train and test split index file
+  index_csv: "/Users/farshidrahmani/Dataset/splits/index_csv.csv"
+  splits_dir: "/Users/farshidrahmani/Dataset/splits/"
+  ##
+  # CONUS inland shape file to find satellite images that have intersection with it. Note that it is not a static input.
+  conus_geom: "/Users/farshidrahmani/Dataset/conus_geom_fix/conus_geom_fix.gpkg"
+
+# This path contains the master grids that were created in pre-processing step
+master_grids_dir: "/Users/farshidrahmani/Dataset/master_grids_dir"
+
+# Which features to include
+features:
+  hourly:        []  #["precip", "air_temp", "solar_shortwave"]
+  three_hourly:  ["terrain_router", "soil_sm_layer1"] #, "soil_sm_layer2", "soil_sm_layer3", "soil_sm_layer4", "SNOWH", "UGDRNOFF"]
+  static:        ["flow_accumulation", "flow_direction", "irrigation", "surface_extent"]
+
+params:
+  save_path: ./
+  resolution: 250    # this will be the resolution of images. All inputs and outputs will be re-gridded to this res
+  overwrite_click: False    # False means not to overwrite the processed files on the raw modis files.
+
+model:
+  num_classes: 1
+
+train:
+  batch_size: 5
+  steps_per_epoch: 20   # num_samples = steps_per-epoch * batch_size
+  rho: 72   # hours
+  No_pixels_x: 128
+  No_pixels_y: 128
+  lr: 0.001
+  epochs: 200
+  start_time: 20101001   # YYYYMMDD
+  end_time: 20111001     # YYYYMMDD
+  train_frac: 0.7
+  num_workers: 0      # controls the number of sub-processes used for data loading
+  save_model_interval: 1
+
+statistics:
+  chunk_size_y: 3840     # number of grids to read in y axis in each chunk when to calculate stats (3840: full CONUS size)
+  chunk_size_x: 4608     # number of grids to read in x axis in each chunk when to calculate stats  (4608: full CONUS size)
+  chunk_size_time: 72    # number of grids to read in time dimension in each chunk when to calculate stats
+  calculate_p10_p90: False   # if we want to calculate p10 and p90. For some methods of normalization, we may need it
+  n_bins: 100            # to calculate p10 and p90
+  ignore_values_for_inputs: [255.0, 1e+20]   # list of values that should be ignored
+  flag_larger_as_nodata_for_inputs: True     # True or False, to remove values larger than "large_threshold" for stats calculation
+  large_threshold_for_inputs: 1e+19     # if "flag_larger_as_nodata_for_inputs==True", then this value works as a threshold
+  ignore_values_for_obs: [ 255.0, 1e+20 ]   # list of values that should be ignored
+  flag_larger_as_nodata_for_obs: True     # True or False, to remove values larger than "large_threshold" for stats calculation
+  large_threshold_for_obs: 1e+19     # if "flag_larger_as_nodata_for_inputs==True", then this value works as a threshold
+
+normalization:
+  fix_nan_with_dyn_inp: "mean"    # if there is nan/inf in the inputs, it will be filled with either "zero", "mean", "min", "max". they are all in normalized space.
+  fix_nan_with_static_inp: "mean"
+  fix_nan_with_obs: False    # same concept as above but for obs. normally, we don't change the values. loss function takes care of nan obs values
+
+np_seed: 1
+seed: 0
+device: "mps:0"
+
+hydra:
+  sweep:
+    dir: scripts/runs
+  run:
+    # Use absolute path to your project root + scripts/runs
+    dir: scripts/runs/${name}/${now:%Y-%m-%d_%H-%M-%S}   # relative to project_root
